@@ -16,7 +16,13 @@ export const TABS = {
   meetings: "Meetings",
   attendance: "Attendance",
   earlyBird: "EarlyBird",
+  reports: "Reports",
 };
+
+// The "I actually attended" report button posts to this Apps Script
+// Web App URL. Leave "" to hide the feature. See the README section
+// "Turn on attendance reports" for how to get this URL (5 minutes).
+export const REPORT_URL = "";
 
 // Fallback values used if the Settings tab is missing a row.
 export const DEFAULTS = {

@@ -1,54 +1,47 @@
 /**
  * ============================================================
- *  SETUP + ENTRYPAD SCRIPT (v2)
+ *  SETUP + ENTRYPAD + REPORTS SCRIPT (v3)
  *  Rotary Club of Mutya ng Santa Maria — Attendance Sheet
  * ============================================================
  *
  *  TWO FUNCTIONS YOU CAN RUN:
  *
- *  ▸ setupWorkbook()   — run ONCE on a fresh sheet. Renames the old
- *    grid to a reference tab, creates Settings / Members / Meetings /
- *    Attendance / EarlyBird with your July 2026 data migrated, then
- *    builds the Lookup + EntryPad tabs described below.
+ *  ▸ setupWorkbook()  — run ONCE on a fresh sheet. Builds all tabs
+ *    with July 2026 data migrated, plus EntryPad and Reports.
  *
- *  ▸ upgradeEntryPad() — run this instead if you ALREADY ran the v1
- *    setup earlier. It adds (or rebuilds) the Lookup and EntryPad
- *    tabs and upgrades the dropdowns on Attendance and EarlyBird so
- *    you can type a NICKNAME or NAME, not just an ID.
+ *  ▸ upgradeSheet()   — run this on a sheet that was set up with an
+ *    earlier version. Adds anything missing (new Meetings columns,
+ *    Reports tab), rebuilds EntryPad/Lookup and the dropdowns.
+ *    Safe to run any time; it never touches your recorded data.
  *
- *  WHAT'S NEW IN v2
+ *  WHAT'S NEW IN v3
  *  ----------------
- *  1. "Lookup" tab (hidden): builds a searchable label per member,
- *     e.g.  AIDA · MARIA AIDA ABAYA · M001
- *     and per event, e.g.  2026-07-06 · Induction · 20260706-REG.
- *     Labels come from live formulas, so new members/events appear
- *     in every dropdown automatically.
+ *  1. Meetings gains two columns:
+ *       status      — set to "cancelled" and the event disappears from
+ *                     the app, EntryPad, and everyone's requirements.
+ *                     Blank or "scheduled" = normal.
+ *       is_project  — set to "yes" for club projects; the app has a
+ *                     Projects leaderboard counting these.
+ *     The monthly requirement is now dynamic: it equals the number of
+ *     scheduled regular meetings that month, capped at 4.
  *
- *  2. Smarter dropdowns on Attendance + EarlyBird: start typing a
- *     nickname, a surname, or an ID and Sheets suggests the matching
- *     label. Picking the label is enough — the web app understands
- *     labels, plain IDs, nicknames, and full names.
+ *  2. Reports tab + doPost(): members can tap "I was there — tell the
+ *     admin" in the app when an event is wrongly marked missed. Each
+ *     tap becomes a row here (status: new → reviewed → resolved).
+ *     TO ACTIVATE: Deploy → New deployment → type "Web app" →
+ *     Execute as: Me · Who has access: Anyone → Deploy → copy the
+ *     Web app URL → paste it into REPORT_URL in the app's
+ *     src/config.js. Full steps are in the README.
  *
- *  3. "EntryPad" tab — the fast way to record a whole meeting:
- *       · pick the event in the yellow cell at the top
- *       · tick the checkbox beside each member who attended
- *       · (regular meetings) type Early Bird ranks 1–10 in the EB column
- *       · tick the green SAVE checkbox
- *     Everything is copied to the Attendance / EarlyBird tabs
- *     (duplicates are skipped automatically) and the pad clears
- *     itself, ready for the next event. Works on phones too.
- *     There is also a menu: Rotary Tools → Save EntryPad now.
+ *  (v2 features kept: EntryPad fast recording, searchable name
+ *  dropdowns, auto-expanding rows, duplicate protection.)
  *
  *  HOW TO INSTALL
  *  --------------
  *  1. Open the Google Sheet → Extensions → Apps Script.
  *  2. Replace everything in the editor with this whole file. Save.
- *  3. Pick setupWorkbook (fresh sheet) or upgradeEntryPad (already
- *     set up) in the dropdown, click Run, and authorize when asked
- *     (your account → Advanced → Go to … → Allow).
- *  4. IMPORTANT for the SAVE checkbox: it uses the onEdit trigger,
- *     which activates automatically once the script is saved —
- *     nothing else to configure.
+ *  3. Run setupWorkbook (fresh) or upgradeSheet (existing), authorize
+ *     when asked (your account → Advanced → Go to … → Allow).
  */
 
 // ================================================================
@@ -60,8 +53,44 @@ function onOpen() {
     .createMenu("Rotary Tools")
     .addItem("Save EntryPad now", "saveEntryPad")
     .addItem("Clear EntryPad (without saving)", "clearEntryPad")
-    .addItem("Rebuild EntryPad & Lookup", "upgradeEntryPad")
+    .addItem("Upgrade sheet to latest version", "upgradeSheet")
     .addToUi();
+}
+
+// ================================================================
+//  ATTENDANCE REPORTS ("I was there" button in the app)
+//  The app POSTs here when a member says an event was wrongly
+//  marked as missed. Each report becomes a row in the Reports tab.
+//  To activate: Deploy → New deployment → Web app →
+//  Execute as: Me · Who has access: Anyone → copy the URL into
+//  src/config.js (REPORT_URL) in the app code.
+// ================================================================
+
+function doPost(e) {
+  var out = { ok: false };
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName("Reports");
+    if (!sh) throw new Error("Reports tab missing — run upgradeSheet.");
+    var data = {};
+    try { data = JSON.parse(e.postData.contents); } catch (ignored) {}
+    var clean = function (v) { return String(v || "").slice(0, 300); };
+    var when = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd HH:mm");
+    sh.appendRow([
+      when,
+      clean(data.member_id),
+      clean(data.member_name),
+      clean(data.meeting_id),
+      clean(data.event_title),
+      clean(data.message),
+      "new",
+    ]);
+    out.ok = true;
+  } catch (err) {
+    out.error = String(err.message || err);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 function onEdit(e) {
@@ -102,6 +131,10 @@ function saveEntryPad() {
   var meeting = findMeeting_(ss, meetingId);
   if (!meeting) {
     finishPad_(pad, status, "⚠ Event \"" + meetingId + "\" is not in the Meetings tab — nothing was saved.");
+    return;
+  }
+  if (meeting.cancelled) {
+    finishPad_(pad, status, "⚠ \"" + meeting.title + "\" is marked cancelled — nothing was saved.");
     return;
   }
   var isRegular = String(meeting.type).toLowerCase() === "regular";
@@ -224,10 +257,22 @@ function extractMeetingId_(text) {
 
 function findMeeting_(ss, meetingId) {
   var sh = ss.getSheetByName("Meetings");
-  var data = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 4).getValues();
+  var lastCol = sh.getLastColumn();
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) {
+    return String(h).trim().toLowerCase();
+  });
+  var statusIdx = headers.indexOf("status"); // may be -1 on old sheets
+  var data = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), lastCol).getValues();
   for (var i = 0; i < data.length; i++) {
     if (String(data[i][0]) === meetingId) {
-      return { id: meetingId, date: data[i][1], type: data[i][2], title: data[i][3] };
+      return {
+        id: meetingId,
+        date: data[i][1],
+        type: data[i][2],
+        title: data[i][3],
+        cancelled: statusIdx >= 0 &&
+          String(data[i][statusIdx]).trim().toLowerCase() === "cancelled",
+      };
     }
   }
   return null;
@@ -263,25 +308,86 @@ function existingMeetingValues_(sheet, meetingCol, valueCol) {
 //  LOOKUP + ENTRYPAD + SMART DROPDOWNS (v2 upgrade)
 // ================================================================
 
-function upgradeEntryPad() {
+function upgradeSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ["Members", "Meetings", "Attendance", "EarlyBird"].forEach(function (name) {
     if (!ss.getSheetByName(name)) {
       throw new Error('Tab "' + name + '" is missing. Run setupWorkbook first.');
     }
   });
+  ensureMeetingsColumns_(ss);
+  ensureReportsTab_(ss);
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
   SpreadsheetApp.flush();
   try {
     SpreadsheetApp.getUi().alert(
-      "EntryPad is ready!\n\n" +
-      "· Record a meeting: open the EntryPad tab, pick the event, tick attendees, " +
-      "type Early Bird ranks if any, then tick SAVE.\n" +
-      "· Attendance & EarlyBird dropdowns now accept nicknames and names too."
+      "Sheet upgraded!\n\n" +
+      "· Meetings now has 'status' (cancel an event by setting it to cancelled) " +
+      "and 'is_project' (mark projects with yes for the Projects leaderboard).\n" +
+      "· A Reports tab collects members' \"I was there\" messages from the app " +
+      "(remember to deploy the Web App and paste its URL into the app's config).\n" +
+      "· EntryPad and all dropdowns were rebuilt."
     );
   } catch (ignored) {}
+}
+
+// kept for anyone following older instructions
+function upgradeEntryPad() { upgradeSheet(); }
+
+function ensureMeetingsColumns_(ss) {
+  var sh = ss.getSheetByName("Meetings");
+  var lastCol = sh.getLastColumn();
+  var headers = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (h) {
+    return String(h).trim().toLowerCase();
+  });
+  var col;
+
+  // status column: blank or "scheduled" = happening; "cancelled" = doesn't count
+  col = headers.indexOf("status") + 1;
+  if (col === 0) {
+    col = lastCol + 1;
+    sh.getRange(1, col).setValue("status")
+      .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+    lastCol = col;
+  }
+  dropdownAllowBlank_(sh, col, ["scheduled", "cancelled"]);
+  var statusCol = col;
+
+  // is_project column: yes = counts on the Projects leaderboard
+  var headers2 = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (h) {
+    return String(h).trim().toLowerCase();
+  });
+  col = headers2.indexOf("is_project") + 1;
+  if (col === 0) {
+    col = sh.getLastColumn() + 1;
+    sh.getRange(1, col).setValue("is_project")
+      .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  }
+  dropdownAllowBlank_(sh, col, ["yes", "no"]);
+
+  return statusCol;
+}
+
+function dropdownAllowBlank_(sheet, col, values) {
+  var rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(values, true)
+    .setAllowInvalid(true) // blank cells are fine
+    .build();
+  sheet.getRange(2, col, sheet.getMaxRows() - 1, 1).setDataValidation(rule);
+}
+
+function ensureReportsTab_(ss) {
+  if (ss.getSheetByName("Reports")) return;
+  var sh = ss.insertSheet("Reports");
+  writeTable_(sh,
+    ["timestamp", "member_id", "member_name", "meeting_id", "event_title", "message", "status"],
+    []);
+  dropdown_(sh, 7, ["new", "reviewed", "resolved"]);
+  sh.setColumnWidth(3, 240);
+  sh.setColumnWidth(5, 240);
+  sh.setColumnWidth(6, 280);
 }
 
 function buildLookup_(ss) {
@@ -295,11 +401,33 @@ function buildLookup_(ss) {
     '=ARRAYFORMULA(IF(Members!A2:A="",,Members!E2:E&" · "&Members!C2:C&" "&Members!B2:B&" · "&Members!A2:A))'
   );
   sh.getRange("B2").setFormula('=ARRAYFORMULA(IF(Members!A2:A="",,Members!A2:A))');
+
+  // Event labels skip cancelled events so they can't be picked on EntryPad.
+  var meetings = ss.getSheetByName("Meetings");
+  var headers = meetings.getRange(1, 1, 1, meetings.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim().toLowerCase(); });
+  var statusIdx = headers.indexOf("status");
+  var cancelledTest = "";
+  if (statusIdx >= 0) {
+    var letter = columnLetter_(statusIdx + 1);
+    cancelledTest = '+(LOWER(Meetings!' + letter + '2:' + letter + ')="cancelled")';
+  }
   sh.getRange("C2").setFormula(
-    '=ARRAYFORMULA(IF(Meetings!A2:A="",,Meetings!B2:B&" · "&Meetings!D2:D&" · "&Meetings!A2:A))'
+    '=ARRAYFORMULA(IF((Meetings!A2:A="")' + cancelledTest +
+    ',,Meetings!B2:B&" · "&Meetings!D2:D&" · "&Meetings!A2:A))'
   );
   sh.getRange("D2").setFormula('=ARRAYFORMULA(IF(Meetings!A2:A="",,Meetings!A2:A))');
   sh.hideSheet();
+}
+
+function columnLetter_(col) {
+  var letter = "";
+  while (col > 0) {
+    var rem = (col - 1) % 26;
+    letter = String.fromCharCode(65 + rem) + letter;
+    col = Math.floor((col - 1) / 26);
+  }
+  return letter;
 }
 
 function buildEntryPad_(ss) {
@@ -404,6 +532,8 @@ function setupWorkbook() {
   buildMeetings_(ss);
   buildAttendance_(ss);
   buildEarlyBird_(ss);
+  ensureMeetingsColumns_(ss);
+  ensureReportsTab_(ss);
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
@@ -472,11 +602,12 @@ function buildMembers_(ss) {
 function buildMeetings_(ss) {
   var sh = ss.insertSheet("Meetings");
   var data = MEETINGS_.map(function (m) {
-    return [m[0], m[1], m[2], m[3], "", "1", ""];
+    // m = [id, date, type, title, is_project]
+    return [m[0], m[1], m[2], m[3], "", "1", "", "", m[4] || ""];
   });
   writeTable_(sh,
     ["meeting_id", "date", "meeting_type", "activity_title",
-     "location", "credit_value", "notes"],
+     "location", "credit_value", "notes", "status", "is_project"],
     data);
   textColumn_(sh, 2);
   dropdown_(sh, 3, ["regular", "makeup", "special"]);
@@ -551,19 +682,20 @@ var MEMBERS_ = [
 ];
 
 var MEETINGS_ = [
-  ["20260701-TREE","2026-07-01","makeup","Tree Planting"],
-  ["20260704-MEEAA","2026-07-04","makeup","Joint Project MEEAA"],
-  ["20260706-REG","2026-07-06","regular","Induction"],
-  ["20260707-RCSM","2026-07-07","makeup","RC Santa Maria"],
-  ["20260708-GOV","2026-07-08","makeup","Governor's Visit"],
-  ["20260713-REG","2026-07-13","regular","Regular Meeting"],
-  ["20260720-REG","2026-07-20","regular","Regular Meeting"],
-  ["20260725-MOMMY","2026-07-25","makeup","Malusog si Mommy"],
-  ["20260727-REG","2026-07-27","regular","Regular Meeting"],
-  ["20260731-PIC","2026-07-31","makeup","Change of Profile Pic"],
-  ["20260731-REPOST","2026-07-31","makeup","Repost Infographics"],
-  ["20260731-MARKER","2026-07-31","makeup","Photo in Rotary Marker"],
-  ["20260731-RESEARCH","2026-07-31","makeup","Research about Rotary"]
+  // [id, date, type, title, is_project] — adjust "yes" flags anytime in the sheet
+  ["20260701-TREE","2026-07-01","makeup","Tree Planting","yes"],
+  ["20260704-MEEAA","2026-07-04","makeup","Joint Project MEEAA","yes"],
+  ["20260706-REG","2026-07-06","regular","Induction",""],
+  ["20260707-RCSM","2026-07-07","makeup","RC Santa Maria",""],
+  ["20260708-GOV","2026-07-08","makeup","Governor's Visit",""],
+  ["20260713-REG","2026-07-13","regular","Regular Meeting",""],
+  ["20260720-REG","2026-07-20","regular","Regular Meeting",""],
+  ["20260725-MOMMY","2026-07-25","makeup","Malusog si Mommy","yes"],
+  ["20260727-REG","2026-07-27","regular","Regular Meeting",""],
+  ["20260731-PIC","2026-07-31","makeup","Change of Profile Pic",""],
+  ["20260731-REPOST","2026-07-31","makeup","Repost Infographics",""],
+  ["20260731-MARKER","2026-07-31","makeup","Photo in Rotary Marker",""],
+  ["20260731-RESEARCH","2026-07-31","makeup","Research about Rotary",""]
 ];
 
 var ATTENDANCE_ = buildAttendanceData_();

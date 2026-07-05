@@ -414,3 +414,130 @@ button { font: inherit; cursor: pointer; }
   .hero__stats { grid-template-columns: 1fr; }
   .member-hero__grid { grid-template-columns: repeat(4, 1fr); }
 }
+
+/* ============================================================
+   v3 additions: senior-friendly sizing, event check-list,
+   report flow, medals, cancelled events, tab bar icons
+   ============================================================ */
+
+html, body { font-size: 17px; }
+
+.card h2 { font-size: 22px; }
+.member-hero__head h1 { font-size: 36px; }
+.eyebrow { font-size: 13px; }
+.muted { font-size: 15px; line-height: 1.55; }
+.stat__label { font-size: 14px; }
+.chip { font-size: 16px; padding: 8px 18px; }
+.month-picker select { font-size: 16px; padding: 9px 12px; }
+.member-picker input { font-size: 17px; padding: 14px 16px; }
+.topbar__brand img { height: 54px; }
+
+.ring-explain {
+  text-align: center;
+  color: var(--slate);
+  font-size: 15px;
+  margin: 2px 0 0;
+  max-width: 40ch;
+}
+.gold-word { color: var(--gold-deep); }
+
+/* tab bar: bigger, with icons */
+.tabbar__item {
+  padding: 10px 4px 12px;
+  font-size: 15px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.tabbar__icon { font-size: 22px; line-height: 1; }
+
+/* member month event check-list */
+.event-check-list { list-style: none; margin: 10px 0 0; padding: 0; }
+.event-check {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: #fff;
+}
+.event-check--attended { background: #f0f9f1; border-color: #cbe7cf; }
+.event-check--missed { background: #fdf4f2; border-color: #f0d4cc; }
+.event-check__main { display: flex; align-items: center; gap: 12px; }
+.event-check__info { flex: 1; display: flex; flex-direction: column; }
+.event-check__mark {
+  width: 34px; height: 34px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  font-size: 18px; font-weight: 800;
+}
+.event-check__mark--attended { background: #2c7a3d; color: #fff; }
+.event-check__mark--missed { background: #f3ded8; color: #a03518; }
+.event-check__mark--upcoming { background: var(--mist); font-size: 16px; }
+
+/* report button + form */
+.report-btn {
+  margin-top: 10px;
+  width: 100%;
+  background: #c0392b;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.report-btn:hover { background: #a63324; }
+.report-cancel {
+  width: 100%;
+  margin-top: 8px;
+  background: var(--mist);
+  color: var(--slate);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 14px;
+  font-size: 16px;
+  font-weight: 600;
+}
+.report-form { margin-top: 10px; }
+.report-form p { font-size: 15px; color: var(--slate); margin: 0 0 8px; }
+.report-form input {
+  width: 100%;
+  font: inherit;
+  font-size: 16px;
+  padding: 11px 13px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+}
+.report-status { margin: 10px 0 0; font-size: 15px; color: var(--slate); }
+.report-status--ok { color: #2c7a3d; font-weight: 600; }
+
+/* leaderboard medals + captions + bigger tab chips */
+.board-tab {
+  font-size: 15px;
+  padding: 9px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.15;
+}
+.board-tab small { font-size: 11px; font-weight: 500; opacity: 0.85; }
+.board-caption {
+  color: var(--slate);
+  font-size: 15px;
+  line-height: 1.55;
+  margin: 6px 0 4px;
+}
+.board__medal { font-size: 26px; width: 34px; flex: none; text-align: center; }
+.board__rank { width: 34px; height: 34px; font-size: 15px; }
+.board__name { font-size: 17px; }
+.board__value { font-size: 18px; }
+.board__value small { font-size: 12px; color: var(--slate); font-weight: 500; }
+.board li { padding: 11px 0; }
+
+/* cancelled + project tags */
+.event-card__tags { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.typetag--cancelled { background: #efe1de; color: #8c2f1b; }
+.typetag--project { background: #e2f2e5; color: #226b32; }
+.event-card--cancelled { opacity: 0.62; }
+.event-card--cancelled .event-card__top strong { text-decoration: line-through; }

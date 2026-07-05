@@ -22,26 +22,29 @@ export default function Dashboard({ model, mk, months, setMonth, today, go }) {
           <div className="hero__stats">
             <div className="stat">
               <span className="stat__num">{club.completeCount}</span>
-              <span className="stat__label">members complete ({model.required}/{model.required})</span>
+              <span className="stat__label">members completed this month ({club.required} of {club.required} credits)</span>
             </div>
             <div className="stat">
               <span className="stat__num">{club.lackingCount}</span>
-              <span className="stat__label">still need credits</span>
+              <span className="stat__label">members still need credits</span>
             </div>
             <div className="stat">
               <span className="stat__num">{club.rawCredits}</span>
-              <span className="stat__label">total credits recorded</span>
+              <span className="stat__label">total credits recorded this month</span>
             </div>
           </div>
         </div>
         <p className="hero__foot">
-          Target = every one of the {club.activeCount} active members reaching {model.required} credits this month.
-          Credits above {model.required} are welcome extra participation and are counted in the total.
+          This month's requirement is <strong>{club.required} attendance credit{club.required === 1 ? "" : "s"}</strong> per
+          member (the number of Monday meetings scheduled, up to {model.required}).
+          The big circle shows how close all {club.activeCount} active members are, together,
+          to reaching it. Credits above the requirement are welcome extra participation.
         </p>
       </section>
 
       <section className="card">
         <h2>Check my attendance</h2>
+        <p className="muted">Type your nickname or name, then tap it to see your own record.</p>
         <MemberPicker members={model.activeMembers} onPick={(id) => go(`#/members/${id}`)} />
       </section>
 

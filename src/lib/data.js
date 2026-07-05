@@ -38,7 +38,9 @@ export async function loadAll() {
       fetchTab(TABS.attendance),
       fetchTab(TABS.earlyBird),
     ]);
-  return normalize({ settingsRows, members, meetings, attendance, earlybird });
+  // Reports tab is optional (older sheets may not have it yet).
+  const reports = await fetchTab(TABS.reports).catch(() => []);
+  return normalize({ settingsRows, members, meetings, attendance, earlybird, reports });
 }
 
 export function loadSample() {
@@ -48,10 +50,11 @@ export function loadSample() {
     meetings: SAMPLE.meetings,
     attendance: SAMPLE.attendance,
     earlybird: SAMPLE.earlybird,
+    reports: [],
   });
 }
 
-function normalize({ settingsRows, members, meetings, attendance, earlybird }) {
+function normalize({ settingsRows, members, meetings, attendance, earlybird, reports }) {
   const settings = { ...DEFAULTS };
   for (const r of settingsRows) {
     if (r.setting_key) settings[r.setting_key] = r.setting_value;
@@ -61,5 +64,5 @@ function normalize({ settingsRows, members, meetings, attendance, earlybird }) {
   settings.early_bird_slots_per_regular_meeting =
     parseInt(settings.early_bird_slots_per_regular_meeting, 10) || 10;
 
-  return { settings, members, meetings, attendance, earlybird };
+  return { settings, members, meetings, attendance, earlybird, reports: reports || [] };
 }

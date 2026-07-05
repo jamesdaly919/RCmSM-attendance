@@ -133,6 +133,41 @@ Same as above, but:
 For social-media makeups (profile pic, reposts…), date them the **last day of
 the month they count toward**, e.g. `2026-08-31`.
 
+### Cancel an event
+
+In the **Meetings** tab, set the event's **status** column to `cancelled`
+(dropdown). Don't delete the row. The event immediately:
+
+- disappears from the app's upcoming lists and can't be picked on EntryPad,
+- shows greyed-out with a "Cancelled" tag on the Events page,
+- stops counting for or against anyone — and it lowers that month's
+  requirement if it was a regular meeting (see next section).
+
+If attendance was recorded before the cancellation, those rows are simply
+ignored (the Data check reminds you they exist).
+
+### How the monthly requirement adapts
+
+**A month's requirement = the number of scheduled (non-cancelled) regular
+meetings that month, capped at 4.** Examples:
+
+- Normal month, 4 Mondays → members need **4** credits.
+- Month with 5 Mondays → still **4** (the extra Monday just helps).
+- December with only 1 meeting → members need **1** credit.
+- 4 Mondays but 2 cancelled → members need **2** credits.
+
+Credits can come from regular meetings *or* makeup activities either way. If a
+month has no regular meetings entered yet, the default of 4 applies — so add
+the month's Mondays to the Meetings tab at the start of each month.
+
+### Mark projects (for the Projects leaderboard)
+
+In the **Meetings** tab, set **is_project** to `yes` for club projects (tree
+planting, medical missions, community service, etc.). The Leaders page has a
+Projects board counting how many project events each member attended, this
+month and this Rotary year. Social-media makeups and regular meetings are
+normally left blank (= not a project).
+
 ### Record attendance after an event — use the EntryPad tab
 
 The **EntryPad** tab shows the full roster once, with checkboxes. This is the
@@ -184,23 +219,61 @@ one award per row, regular meetings only.
 
 ---
 
-## Part 3 — How the app calculates things
+## Part 3 — Turn on attendance reports ("I was there" button)
+
+On each member's page, events they missed show a red button:
+**"I was there — tell the admin."** Tapping it sends a note that lands as a
+row in the sheet's **Reports** tab (with timestamp, member, event, and their
+optional message). You review it, fix the Attendance tab if they're right,
+and set the report's status to `resolved`.
+
+This needs a one-time, ~5-minute activation, because the public sheet is
+read-only and the button must *write*:
+
+1. Open the sheet → **Extensions → Apps Script** (the script should already
+   be the latest version; if not, paste it in and run **upgradeSheet**).
+2. Click **Deploy → New deployment**.
+3. Click the gear icon next to "Select type" → choose **Web app**.
+4. Set **Execute as: Me** and **Who has access: Anyone**. Click **Deploy**
+   and authorize if asked.
+5. Copy the **Web app URL** (it ends in `/exec`).
+6. On GitHub, open `src/config.js`, click the pencil to edit, and paste the
+   URL between the quotes of `REPORT_URL = ""`. Commit — Vercel redeploys
+   automatically, and the red buttons appear.
+
+Notes: "Execute as Me" means reports are written with *your* permission —
+members never get edit access to the sheet. Until `REPORT_URL` is filled in,
+the buttons stay hidden. Members can see when their report is pending
+("Reported — the admin will review it"); once you fix the attendance, the
+event flips to Attended.
+
+Small maintenance point: if you later paste a **newer version of the script**,
+use **Deploy → Manage deployments → (pencil) → New version** so the existing
+URL keeps working — don't create a second deployment.
+
+## Part 4 — How the app calculates things
 
 - **Member monthly credits** = sum of `credit_given` for their attendance rows
-  in that month. Required = 4 (changeable in Settings).
+  in that month (cancelled events excluded). The requirement is dynamic: the
+  number of scheduled regular meetings that month, capped at 4.
   - ≥ 4 → **Complete** (ring turns gold); above 4 shows **Exceeded · +X extra**
   - < 4 → **Needs X more**
-- **Club target %** = sum of each active member's credits *capped at 4*,
-  divided by (active members × 4). This measures the club against the
-  requirement.
+- **Club target %** = sum of each active member's credits *capped at the
+  month's requirement*, divided by (active members × requirement).
 - **Total credits recorded** = raw sum including extras above 4.
+- **Projects** = attended events marked `is_project = yes`, counted per month
+  and per Rotary year for the Projects leaderboard.
 - **Early Bird counts** = number of EarlyBird rows per member, shown per month
   and per Rotary year (July–June).
 - Only **Active** members count in club stats and leaderboards; Inactive
   members can still be looked up individually.
 
-## Part 4 — Odds and ends
+## Part 5 — Odds and ends
 
+- **Home-screen icon:** when members use Safari's Share → "Add to Home
+  Screen", the app installs with its own icon — a gold Rotary-style gear
+  around a pearl ("Mutya") with a Marian star. The icon files live in
+  `public/`; replace them any time to change it.
 - **Demo mode:** add `?demo=1` to the app address to preview it with the
   bundled July 2026 snapshot (useful for testing without touching the sheet).
 - **Refresh delay:** Google caches the public sheet feed for a few minutes.

@@ -74,10 +74,18 @@ export function buildResolvers(members, meetings) {
   return { resolveMember, resolveMeeting };
 }
 
+export function isCancelled(mt) {
+  return (mt.status || "").trim().toLowerCase() === "cancelled";
+}
+
+export function isProject(mt) {
+  return /^y/i.test((mt.is_project || "").trim());
+}
+
 // ---------- core model ----------
 
 export function buildModel(raw) {
-  const { settings, members, meetings, attendance: attendanceRaw, earlybird: earlybirdRaw } = raw;
+  const { settings, members, meetings, attendance: attendanceRaw, earlybird: earlybirdRaw, reports } = raw;
 
   const { resolveMember, resolveMeeting } = buildResolvers(members, meetings);
 
@@ -111,7 +119,7 @@ export function buildModel(raw) {
   const ryEnd = settings.current_rotary_year_end;
   const inRotaryYear = (d) => d >= ryStart && d <= ryEnd;
 
-  // credits[memberId][monthKey] = { credits, regular, makeup, meetings: [] }
+  // credits[memberId][monthKey] = { credits, regular, makeup, projects, meetings: [] }
   const credits = new Map();
   const meetingAttendance = new Map(); // meetingId -> count
   const countedPairs = new Set(); // a duplicate row is flagged by validation, never double-counted
@@ -119,6 +127,7 @@ export function buildModel(raw) {
     const mt = meetingById.get(row.meeting_id);
     const mem = memberById.get(row.member_id);
     if (!mt || !mem) continue; // reported by validation instead
+    if (isCancelled(mt)) continue; // cancelled events never count for or against anyone
     const pairKey = row.meeting_id + "|" + row.member_id;
     if (countedPairs.has(pairKey)) continue;
     countedPairs.add(pairKey);
@@ -127,11 +136,12 @@ export function buildModel(raw) {
     if (!credits.has(row.member_id)) credits.set(row.member_id, new Map());
     const perMonth = credits.get(row.member_id);
     if (!perMonth.has(mk))
-      perMonth.set(mk, { credits: 0, regular: 0, makeup: 0, meetings: [] });
+      perMonth.set(mk, { credits: 0, regular: 0, makeup: 0, projects: 0, meetings: [] });
     const bucket = perMonth.get(mk);
     bucket.credits += credit;
     if ((mt.meeting_type || "").toLowerCase() === "regular") bucket.regular += 1;
     else bucket.makeup += 1;
+    if (isProject(mt)) bucket.projects += 1;
     bucket.meetings.push(mt);
     meetingAttendance.set(row.meeting_id, (meetingAttendance.get(row.meeting_id) || 0) + 1);
   }
@@ -143,6 +153,7 @@ export function buildModel(raw) {
   for (const row of earlybird) {
     const mt = meetingById.get(row.meeting_id);
     if (!mt || !memberById.has(row.member_id)) continue;
+    if (isCancelled(mt)) continue;
     const mk = monthKey(mt.date);
     if (!ebMonthly.has(row.member_id)) ebMonthly.set(row.member_id, new Map());
     const perMonth = ebMonthly.get(row.member_id);
@@ -160,6 +171,7 @@ export function buildModel(raw) {
   return {
     settings, required, slots,
     members, activeMembers, meetings, attendance, earlybird,
+    reports: reports || [],
     memberById, meetingById, resolveMember, resolveMeeting,
     credits, meetingAttendance,
     ebMonthly, ebYearly, ebByMeeting,
@@ -169,11 +181,26 @@ export function buildModel(raw) {
 
 // ---------- per member ----------
 
+// This month's requirement = the number of scheduled (non-cancelled)
+// regular meetings that month, capped at the club default (4).
+// Examples: 5 Mondays -> still 4 needed; December with 1 meeting -> 1;
+// 4 meetings with 2 cancelled -> 2. If no regular meetings are recorded
+// for a month yet, the default applies.
+export function requiredForMonth(model, mk) {
+  let count = 0;
+  for (const mt of model.meetings) {
+    if (isCancelled(mt)) continue;
+    if ((mt.meeting_type || "").toLowerCase() !== "regular") continue;
+    if (monthKey(mt.date) === mk) count += 1;
+  }
+  return count === 0 ? model.required : Math.min(model.required, count);
+}
+
 export function memberMonth(model, memberId, mk) {
   const bucket = model.credits.get(memberId)?.get(mk) || {
-    credits: 0, regular: 0, makeup: 0, meetings: [],
+    credits: 0, regular: 0, makeup: 0, projects: 0, meetings: [],
   };
-  const required = model.required;
+  const required = requiredForMonth(model, mk);
   const remaining = Math.max(0, required - bucket.credits);
   const extra = Math.max(0, bucket.credits - required);
   let status = "needs";
@@ -201,16 +228,29 @@ export function memberMeetingsAttended(model, memberId) {
     if (row.member_id !== memberId || seen.has(row.meeting_id)) continue;
     seen.add(row.meeting_id);
     const mt = model.meetingById.get(row.meeting_id);
-    if (mt) attended.push(mt);
+    if (mt && !isCancelled(mt)) attended.push(mt);
   }
   attended.sort((a, b) => (a.date < b.date ? -1 : 1));
   return attended;
 }
 
+export function memberYearProjects(model, memberId) {
+  let total = 0;
+  const perMonth = model.credits.get(memberId);
+  if (perMonth) {
+    for (const [mk, bucket] of perMonth) {
+      if (mk >= monthKey(model.ryStart) && mk <= monthKey(model.ryEnd)) {
+        total += bucket.projects;
+      }
+    }
+  }
+  return total;
+}
+
 // ---------- club level ----------
 
 export function clubMonth(model, mk) {
-  const required = model.required;
+  const required = requiredForMonth(model, mk);
   const active = model.activeMembers;
   let cappedSum = 0;
   let rawSum = 0;
@@ -223,6 +263,7 @@ export function clubMonth(model, mk) {
   }
   const target = active.length * required;
   return {
+    required,
     activeCount: active.length,
     completeCount,
     lackingCount: active.length - completeCount,
@@ -233,7 +274,7 @@ export function clubMonth(model, mk) {
 
 export function upcomingMeetings(model, today, limit = 3) {
   return model.meetings
-    .filter((mt) => DATE_RE.test(mt.date) && mt.date >= today)
+    .filter((mt) => !isCancelled(mt) && DATE_RE.test(mt.date) && mt.date >= today)
     .sort((a, b) => (a.date < b.date ? -1 : 1))
     .slice(0, limit);
 }
@@ -281,21 +322,44 @@ function rankList(entries) {
 export function leaderboards(model, mk) {
   const monthCredits = [];
   const yearCredits = [];
+  const monthProjects = [];
+  const yearProjects = [];
   const monthEB = [];
   const yearEB = [];
   for (const m of model.activeMembers) {
     const id = m.member_id;
-    monthCredits.push({ member: m, value: memberMonth(model, id, mk).credits });
+    const monthStat = memberMonth(model, id, mk);
+    monthCredits.push({ member: m, value: monthStat.credits });
     yearCredits.push({ member: m, value: memberYearCredits(model, id) });
+    monthProjects.push({ member: m, value: monthStat.projects });
+    yearProjects.push({ member: m, value: memberYearProjects(model, id) });
     monthEB.push({ member: m, value: model.ebMonthly.get(id)?.get(mk) || 0 });
     yearEB.push({ member: m, value: model.ebYearly.get(id) || 0 });
   }
   return {
     monthCredits: rankList(monthCredits),
     yearCredits: rankList(yearCredits),
+    monthProjects: rankList(monthProjects),
+    yearProjects: rankList(yearProjects),
     monthEB: rankList(monthEB),
     yearEB: rankList(yearEB),
   };
+}
+
+// ---------- attendance reports ----------
+
+// Reports written by the app's "I was there" button contain plain IDs,
+// but resolve them anyway in case an admin edits the tab by hand.
+export function pendingReportSet(model) {
+  const set = new Set();
+  for (const r of model.reports) {
+    const memberId = model.resolveMember(r.member_id);
+    const meetingId = model.resolveMeeting(r.meeting_id);
+    if (!memberId || !meetingId) continue;
+    if ((r.status || "").trim().toLowerCase() === "resolved") continue;
+    set.add(memberId + "|" + meetingId);
+  }
+  return set;
 }
 
 // ---------- validation ----------
@@ -334,6 +398,12 @@ export function validate(model) {
       warn(line, `meeting_type "${mt.meeting_type}" should be regular, makeup, or special.`);
     if (mt.credit_value !== "" && isNaN(parseFloat(mt.credit_value)))
       warn(line, `credit_value "${mt.credit_value}" is not a number.`);
+    const st = (mt.status || "").trim().toLowerCase();
+    if (st && st !== "scheduled" && st !== "cancelled")
+      warn(line, `status "${mt.status}" should be scheduled, cancelled, or blank.`);
+    const proj = (mt.is_project || "").trim().toLowerCase();
+    if (proj && proj !== "yes" && proj !== "no" && proj !== "y" && proj !== "n")
+      warn(line, `is_project "${mt.is_project}" should be yes, no, or blank.`);
   });
 
   // Attendance
@@ -345,6 +415,9 @@ export function validate(model) {
     if (!row.member_id)
       warn(line, `Can't identify the member "${row.member_ref}". Use the member_id, exact nickname, or full name.`);
     if (!row.meeting_id || !row.member_id) return;
+    const mtRow = model.meetingById.get(row.meeting_id);
+    if (mtRow && isCancelled(mtRow))
+      warn(line, `Attendance recorded for "${mtRow.activity_title}", which is cancelled — it won't be counted.`);
     const pair = row.meeting_id + "|" + row.member_id;
     if (seenPairs.has(pair))
       warn(line, `Duplicate: ${row.member_ref} is recorded twice for ${row.meeting_id}.`);

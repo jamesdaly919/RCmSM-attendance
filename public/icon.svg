@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="pearl" cx="0.38" cy="0.32" r="0.85">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="55%" stop-color="#f2ecf7"/>
+      <stop offset="100%" stop-color="#cfd0e6"/>
+    </radialGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1c53ab"/>
+      <stop offset="100%" stop-color="#0e3272"/>
+    </linearGradient>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- gear: 12 teeth -->
+  <g fill="#F7A81B">
+    <g id="teeth">
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(0 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(30 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(60 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(90 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(120 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(150 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(180 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(210 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(240 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(270 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(300 256 256)"/>
+      <rect x="238" y="66" width="36" height="52" rx="12"
+            transform="rotate(330 256 256)"/>
+    </g>
+    <!-- gear ring -->
+    <circle cx="256" cy="256" r="150" fill="none" stroke="#F7A81B" stroke-width="52"/>
+  </g>
+
+  <!-- pearl (Mutya) -->
+  <circle cx="256" cy="256" r="96" fill="url(#pearl)"/>
+  <ellipse cx="222" cy="216" rx="30" ry="20" fill="#ffffff" opacity="0.85"/>
+
+  <!-- Marian star -->
+  <path fill="#F7A81B" d="M 322 156
+    L 334 186 L 364 198 L 334 210 L 322 240
+    L 310 210 L 280 198 L 310 186 Z"/>
+  <path fill="#FFD26A" d="M 322 176 L 329 194 L 347 198 L 329 202 L 322 220 L 315 202 L 297 198 L 315 194 Z"/>
+</svg>

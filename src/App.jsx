@@ -85,10 +85,10 @@ export default function App() {
   else page = <Dashboard {...shared} />;
 
   const navItems = [
-    ["#/", "Club", section === "" || section === undefined],
-    ["#/members", "Members", section === "members"],
-    ["#/events", "Events", section === "events"],
-    ["#/leaders", "Leaders", section === "leaders"],
+    ["#/", "Club", "🏠", section === "" || section === undefined],
+    ["#/members", "Members", "👤", section === "members"],
+    ["#/events", "Events", "📅", section === "events"],
+    ["#/leaders", "Leaders", "🏆", section === "leaders"],
   ];
 
   return (
@@ -111,9 +111,10 @@ export default function App() {
       </footer>
 
       <nav className="tabbar">
-        {navItems.map(([href, label, on]) => (
+        {navItems.map(([href, label, icon, on]) => (
           <button key={href} className={on ? "tabbar__item tabbar__item--on" : "tabbar__item"}
             onClick={() => go(href)}>
+            <span className="tabbar__icon" aria-hidden="true">{icon}</span>
             {label}
           </button>
         ))}

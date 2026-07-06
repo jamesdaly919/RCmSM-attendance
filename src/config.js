@@ -6,7 +6,8 @@
 // The ID of your Google Sheet.
 // It's the long code in the sheet's web address:
 // https://docs.google.com/spreadsheets/d/  <THIS PART>  /edit
-export const SHEET_ID = "https://script.google.com/macros/s/AKfycbw4F3Xg2h2pv8jBolj6Y4CtjDBV_p_GNrvQdmpCQYk9rTm3a0r9qO3_9kObglXihyWe-g/exec";
+export const SHEET_ID = "1q1PLCsV2ASGMBCvX7EJLvZdGjKgMZdd59Yj7AuBmUaQ";
+export const REPORT_URL = "https://script.google.com/macros/s/AKfycbw4F3Xg2h2pv8jBolj6Y4CtjDBV_p_GNrvQdmpCQYk9rTm3a0r9qO3_9kObglXihyWe-g/exec";
 
 // The names of the tabs in the Google Sheet.
 // Only change these if you rename the tabs in the sheet itself.

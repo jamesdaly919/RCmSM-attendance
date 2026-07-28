@@ -146,7 +146,10 @@ export function buildModel(raw) {
     meetingAttendance.set(row.meeting_id, (meetingAttendance.get(row.meeting_id) || 0) + 1);
   }
 
-  // Early Bird counts
+  // Early Bird counts.
+  // Club policy: Early Bird counts at ANY non-cancelled meeting where the
+  // secretary records Early Bird rows — regular meetings always run it,
+  // other meetings (board, special) run it at the members' behest.
   const ebMonthly = new Map(); // memberId -> Map(monthKey -> count)
   const ebYearly = new Map(); // memberId -> count (current Rotary year)
   const ebByMeeting = new Map(); // meetingId -> [{rank, member_id}]
@@ -425,14 +428,14 @@ export function validate(model) {
   });
 
   // Early Bird
+  // Club policy: Early Bird can be run at any meeting (regular meetings
+  // always, others at the members' behest), so a non-regular meeting_id
+  // here is fine and raises no warning.
   const ranksPerMeeting = new Map();
   model.earlybird.forEach((row, i) => {
     const line = `EarlyBird row ${i + 2}`;
-    const mt = model.meetingById.get(row.meeting_id);
     if (!row.meeting_id)
       warn(line, `Can't identify the meeting "${row.meeting_ref}". Use the meeting_id or the dropdown label.`);
-    else if ((mt.meeting_type || "").toLowerCase() !== "regular")
-      warn(line, `Early Bird recorded for "${mt.activity_title}", which is not a regular meeting.`);
     if (!row.member_id)
       warn(line, `Can't identify the member "${row.member_ref}". Use the member_id, exact nickname, or full name.`);
     const rank = parseInt(row.rank, 10);

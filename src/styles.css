@@ -541,3 +541,93 @@ html, body { font-size: 17px; }
 .typetag--project { background: #e2f2e5; color: #226b32; }
 .event-card--cancelled { opacity: 0.62; }
 .event-card--cancelled .event-card__top strong { text-decoration: line-through; }
+
+/* ============================================================
+   Attendance at a glance — append this block to src/styles.css
+   (or index.css — whichever file holds the app's styles)
+   ============================================================ */
+
+.glance-tier {
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-top: 12px;
+  border: 2px solid transparent;
+}
+
+/* Tier colors: green (complete) → light green (close) → amber → red */
+.glance-tier--full { background: #e7f6ea; border-color: #b7e2c0; }
+.glance-tier--near { background: #f2f8e6; border-color: #d8e8b8; }
+.glance-tier--far  { background: #fdf3dd; border-color: #f2ddac; }
+.glance-tier--zero { background: #fdeaea; border-color: #f3c1c1; }
+
+.glance-tier__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.glance-tier__badge {
+  font-weight: 800;
+  font-size: 1.15rem;
+  padding: 4px 12px;
+  border-radius: 999px;
+  color: #fff;
+  white-space: nowrap;
+}
+.glance-tier--full .glance-tier__badge { background: #2e9e4f; }
+.glance-tier--near .glance-tier__badge { background: #7fae2e; }
+.glance-tier--far  .glance-tier__badge { background: #d99a1b; }
+.glance-tier--zero .glance-tier__badge { background: #cc4444; }
+
+.glance-tier__label {
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 140px;
+}
+.glance-tier--full .glance-tier__label { color: #226b39; }
+.glance-tier--near .glance-tier__label { color: #5a7a1f; }
+.glance-tier--far  .glance-tier__label { color: #8a6210; }
+.glance-tier--zero .glance-tier__label { color: #8f2f2f; }
+
+.glance-tier__count {
+  font-weight: 700;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.glance-tier__toggle {
+  border: none;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1a4d8f;
+  cursor: pointer;
+}
+
+.glance-tier__names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.glance-chip {
+  border: none;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #123c73;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.glance-chip:active { transform: scale(0.97); }
+
+.glance-tier__empty {
+  margin: 8px 0 0;
+  font-size: 0.95rem;
+}

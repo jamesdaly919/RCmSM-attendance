@@ -1,6 +1,7 @@
 import { PercentRing } from "./Ring.jsx";
 import { MonthPicker, MemberPicker, prettyDate, TypeTag } from "./Shared.jsx";
 import { clubMonth, upcomingMeetings, leaderboards, monthLabel, memberName } from "../lib/stats.js";
+import AtAGlance from "./AtAGlance.jsx";
 
 export default function Dashboard({ model, mk, months, setMonth, today, go }) {
   const club = clubMonth(model, mk);
@@ -41,6 +42,7 @@ export default function Dashboard({ model, mk, months, setMonth, today, go }) {
           to reaching it. Credits above the requirement are welcome extra participation.
         </p>
       </section>
+      <AtAGlance model={model} mk={mk} go={go} />
 
       <section className="card">
         <h2>Check my attendance</h2>

@@ -661,8 +661,13 @@ html, body { font-size: 17px; }
     display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
   }
   .events-calendar__item {
-    width: 7px; height: 7px; padding: 0; border-radius: 999px;
-    color: transparent; font-size: 0;
+    width: 9px; height: 9px; padding: 0; border-radius: 999px;
+    background: var(--azure); color: transparent; font-size: 0;
+    box-shadow: 0 0 0 1px #fff, 0 0 0 2px rgba(23, 69, 143, 0.3);
+  }
+  .events-calendar__item--cancelled {
+    background: #9b321f;
+    box-shadow: 0 0 0 1px #fff, 0 0 0 2px rgba(155, 50, 31, 0.3);
   }
   .events-calendar__items small { display: none; }
 }

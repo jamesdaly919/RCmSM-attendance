@@ -1,13 +1,14 @@
-/**
+﻿/**
  * ============================================================
- *  SETUP + ENTRYPAD + REPORTS SCRIPT (v3)
+ *  SETUP + ENTRYPAD + REPORTS SCRIPT (v4 · Mutya)
  *  Rotary Club of Mutya ng Santa Maria — Attendance Sheet
  * ============================================================
  *
  *  TWO FUNCTIONS YOU CAN RUN:
  *
- *  ▸ setupWorkbook()  — run ONCE on a fresh sheet. Builds all tabs
- *    with July 2026 data migrated, plus EntryPad and Reports.
+ *  ▸ setupWorkbook()  — run ONCE on a fresh, empty Google Sheet.
+ *    Builds all tabs with the Mutya roster and July 2026 data
+ *    preloaded, plus EntryPad, Reports, and AttendanceReport.
  *
  *  ▸ upgradeSheet()   — run this on a sheet that was set up with an
  *    earlier version. Adds anything missing (new Meetings columns,
@@ -53,6 +54,9 @@ function onOpen() {
     .createMenu("Rotary Tools")
     .addItem("Save EntryPad now", "saveEntryPad")
     .addItem("Clear EntryPad (without saving)", "clearEntryPad")
+    .addItem("Refresh sortable EntryPad roster", "refreshEntryPadRoster")
+    .addItem("Add/backfill connected member columns", "upgradeMemberNameColumns")
+    .addItem("Refresh monthly attendance report", "refreshAttendanceReport")
     .addItem("Upgrade sheet to latest version", "upgradeSheet")
     .addToUi();
 }
@@ -94,18 +98,118 @@ function doPost(e) {
 }
 
 function onEdit(e) {
-  // Fires when the SAVE checkbox on EntryPad is ticked.
+  // Fires on every edit: EntryPad SAVE checkbox, and auto meeting IDs.
   try {
     if (!e || !e.range) return;
     var sh = e.range.getSheet();
-    if (sh.getName() !== "EntryPad") return;
+    var name = sh.getName();
+    if (name === "AttendanceReport" && e.range.getA1Notation() === "B1") {
+      refreshAttendanceReport();
+      return;
+    }
+    // keep data tabs ahead of their data as they're edited by hand
+    if (name === "Meetings" || name === "Attendance" ||
+        name === "EarlyBird" || name === "Members" || name === "Reports") {
+      ensureSheetCapacity_(sh);
+    }
+    if (name === "Attendance" || name === "EarlyBird") {
+      syncMemberFieldsForEdit_(e);
+    }
+    if (name === "Attendance" || name === "Members") {
+      refreshAttendanceReport();
+    }
+    if (name === "Members") {
+      // Keep the columns present, but do not rewrite the entire attendance
+      // history inside a 30-second simple trigger.
+      ensureMemberColumns_(e.source);
+    }
+    if (name === "Meetings") {
+      autoMeetingIds_(sh, e.range);
+      refreshAttendanceReport();
+      return;
+    }
+    if (name !== "EntryPad") return;
     if (e.range.getA1Notation() !== "B2") return;
     if (e.value !== "TRUE" && e.value !== true) return;
     saveEntryPad();
   } catch (err) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    ss.toast("Save failed: " + err.message, "EntryPad", 8);
+    ss.toast("Save failed: " + err.message, "Rotary Tools", 8);
   }
+}
+
+// ================================================================
+//  AUTO MEETING IDs
+//  Fill in date, meeting_type, and activity_title on the Meetings
+//  tab and the meeting_id (column A) writes itself:
+//    regular            → 20260714-REG
+//    makeup/special     → 20260815-COASTAL  (first useful word of the
+//                          title, letters/digits only, max 10 chars)
+//  If that ID is already taken, a number is appended (…-REG2).
+//  You can still type an ID by hand — the script never overwrites
+//  a non-empty meeting_id cell.
+// ================================================================
+
+function autoMeetingIds_(sh, editedRange) {
+  var firstRow = Math.max(editedRange.getRow(), 2);
+  var lastRow = editedRange.getLastRow();
+  if (lastRow < 2) return;
+  var n = lastRow - firstRow + 1;
+  var block = sh.getRange(firstRow, 1, n, 4).getValues(); // id, date, type, title
+
+  // all existing ids (for uniqueness)
+  var lastDataRow = sh.getLastRow();
+  var existing = {};
+  if (lastDataRow >= 2) {
+    sh.getRange(2, 1, lastDataRow - 1, 1).getValues().forEach(function (r) {
+      var v = String(r[0]).trim();
+      if (v) existing[v.toUpperCase()] = true;
+    });
+  }
+
+  var updates = 0;
+  for (var i = 0; i < n; i++) {
+    if (String(block[i][0]).trim() !== "") continue; // ID already there
+    var date = normDate_(block[i][1]);
+    var type = String(block[i][2] || "").trim().toLowerCase();
+    var title = String(block[i][3] || "").trim();
+    if (!date || !type) continue;
+    if (type !== "regular" && !title) continue; // makeups need a title first
+    var suffix = type === "regular" ? "REG" : suffixFromTitle_(title, type);
+    var base = date.replace(/-/g, "") + "-" + suffix;
+    var id = base;
+    var k = 2;
+    while (existing[id.toUpperCase()]) { id = base + k; k++; }
+    existing[id.toUpperCase()] = true;
+    sh.getRange(firstRow + i, 1).setValue(id);
+    updates++;
+  }
+  if (updates > 0) {
+    SpreadsheetApp.getActiveSpreadsheet()
+      .toast("meeting_id filled in automatically for " + updates + " row" +
+             (updates === 1 ? "" : "s") + ".", "Meetings", 5);
+  }
+}
+
+function normDate_(v) {
+  if (v instanceof Date) {
+    return Utilities.formatDate(v,
+      SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), "yyyy-MM-dd");
+  }
+  var s = String(v || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+}
+
+function suffixFromTitle_(title, type) {
+  var words = title.toUpperCase().replace(/[^A-Z0-9 ]/g, " ").split(/\s+/)
+    .filter(function (w) { return w; });
+  var skip = { THE: 1, A: 1, AN: 1, OF: 1, AND: 1, FOR: 1, TO: 1, IN: 1, ON: 1, WITH: 1 };
+  var pick = "";
+  for (var i = 0; i < words.length; i++) {
+    if (!skip[words[i]] && words[i].length >= 3) { pick = words[i]; break; }
+  }
+  if (!pick) pick = words[0] || type.toUpperCase();
+  return pick.slice(0, 10);
 }
 
 // ================================================================
@@ -141,11 +245,14 @@ function saveEntryPad() {
 
   // 2. Read the pad rows.
   var n = PAD_LAST_ROW - PAD_FIRST_ROW + 1;
-  var values = pad.getRange(PAD_FIRST_ROW, 1, n, 5).getValues(); // Present, Member, EB, Credit, Notes
+  var values = pad.getRange(PAD_FIRST_ROW, 1, n, 7).getValues();
+  // Present, Full name (last first), Nickname, Member ID, EB, Credit, Notes
 
   // 3. What already exists (to skip duplicates)?
+  ensureMemberColumns_(ss);
   var att = ss.getSheetByName("Attendance");
   var eb = ss.getSheetByName("EarlyBird");
+  var memberIndex = buildMemberIndex_(ss);
   var existingPairs = existingPairs_(att, 1, 2);          // meeting|member
   var existingEB = existingPairs_(eb, 1, 3);              // meeting|member
   var existingRanks = existingMeetingValues_(eb, 1, 2);   // meeting|rank
@@ -155,22 +262,30 @@ function saveEntryPad() {
 
   for (var i = 0; i < values.length; i++) {
     var present = values[i][0] === true;
-    var memberLabel = String(values[i][1] || "");
-    var ebRank = String(values[i][2] || "").trim();
-    var credit = String(values[i][3] || "").trim();
-    var notes = String(values[i][4] || "").trim();
+    var memberId = String(values[i][3] || "").trim();
+    var ebRank = String(values[i][4] || "").trim();
+    var credit = String(values[i][5] || "").trim();
+    var notes = String(values[i][6] || "").trim();
     if (!present) {
       if (ebRank) ebIgnored++; // rank typed but not marked present
       continue;
     }
-    var memberId = extractMemberId_(memberLabel);
-    if (!memberId) { skippedBad++; continue; }
+    var member = memberForRef_(memberIndex, memberId);
+    if (!member) { skippedBad++; continue; }
+    memberId = member.id;
 
     var pairKey = meetingId + "|" + memberId;
     if (existingPairs[pairKey]) {
       skippedDup++;
     } else {
-      attRows.push([meetingId, memberId, credit === "" ? "1" : credit, notes]);
+      attRows.push([
+        meetingId,
+        memberId,
+        member.name,
+        member.nickname,
+        credit === "" ? "1" : credit,
+        notes
+      ]);
       existingPairs[pairKey] = true;
     }
 
@@ -180,7 +295,7 @@ function saveEntryPad() {
       } else if (existingEB[pairKey] || existingRanks[meetingId + "|" + ebRank]) {
         ebIgnored++;
       } else {
-        ebRows.push([meetingId, ebRank, memberId, ""]);
+        ebRows.push([meetingId, ebRank, memberId, member.name, member.nickname, ""]);
         existingEB[pairKey] = true;
         existingRanks[meetingId + "|" + ebRank] = true;
       }
@@ -190,12 +305,16 @@ function saveEntryPad() {
   // 4. Append (growing the sheets first if they're near their row limit).
   if (attRows.length > 0) {
     ensureRows_(att, attRows.length);
-    att.getRange(att.getLastRow() + 1, 1, attRows.length, 4).setValues(attRows);
+    att.getRange(att.getLastRow() + 1, 1, attRows.length, 6).setValues(attRows);
   }
   if (ebRows.length > 0) {
     ensureRows_(eb, ebRows.length);
-    eb.getRange(eb.getLastRow() + 1, 1, ebRows.length, 4).setValues(ebRows);
+    eb.getRange(eb.getLastRow() + 1, 1, ebRows.length, 6).setValues(ebRows);
   }
+
+  // 4b. Keep every tab comfortably ahead of its data.
+  ensureCapacity_(ss);
+  refreshAttendanceReport();
 
   // 5. Clear the pad + report.
   clearPadRows_(pad);
@@ -215,6 +334,32 @@ function clearEntryPad() {
   if (!pad) return;
   clearPadRows_(pad);
   finishPad_(pad, pad.getRange("C2"), "EntryPad cleared — nothing was saved.");
+}
+
+// ---- capacity management ----
+// Google Sheets tabs start with 1,000 rows and DO NOT grow by themselves
+// when you type in the last row. These helpers keep every data tab at
+// least 200 rows ahead of its data, growing in 500-row chunks. New rows
+// inherit the dropdowns and formatting of the row above them, so nothing
+// breaks as the sheet grows over the years. The Attendance tab is the
+// fast-growing one (~400+ rows per month for this club), so it is topped
+// up on every EntryPad save; the others are topped up whenever they are
+// edited and whenever upgradeSheet runs.
+
+var CAPACITY_CUSHION = 200;
+var CAPACITY_CHUNK = 500;
+
+function ensureSheetCapacity_(sh) {
+  if (!sh) return;
+  var free = sh.getMaxRows() - sh.getLastRow();
+  if (free < CAPACITY_CUSHION) {
+    sh.insertRowsAfter(sh.getMaxRows(), CAPACITY_CHUNK);
+  }
+}
+
+function ensureCapacity_(ss) {
+  ["Members", "Meetings", "Attendance", "EarlyBird", "Reports", "Lookup", "AttendanceReport"]
+    .forEach(function (name) { ensureSheetCapacity_(ss.getSheetByName(name)); });
 }
 
 // ---- save helpers ----
@@ -242,7 +387,7 @@ function clearPadRows_(pad) {
   var falses = [];
   for (var i = 0; i < n; i++) falses.push([false]);
   pad.getRange(PAD_FIRST_ROW, 1, n, 1).setValues(falses); // untick Present
-  pad.getRange(PAD_FIRST_ROW, 3, n, 3).clearContent();    // EB, Credit, Notes
+  pad.getRange(PAD_FIRST_ROW, 5, n, 3).clearContent();    // EB, Credit, Notes
 }
 
 function extractMemberId_(text) {
@@ -316,25 +461,138 @@ function upgradeSheet() {
     }
   });
   ensureMeetingsColumns_(ss);
+  ensureMemberColumns_(ss);
   ensureReportsTab_(ss);
+  ensureAttendanceReportTab_(ss);
+  var addedSettings = ensureSettings_(ss);
+  // refresh dropdowns that were previously only set at first setup:
+  dropdown_(ss.getSheetByName("EarlyBird"), 2, ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]); // rank
+  dropdown_(ss.getSheetByName("Members"), 6, ["Active", "Inactive", "Honorary"]);
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
+  ensureCapacity_(ss);
+  refreshAttendanceReport();
   SpreadsheetApp.flush();
-  try {
-    SpreadsheetApp.getUi().alert(
-      "Sheet upgraded!\n\n" +
-      "· Meetings now has 'status' (cancel an event by setting it to cancelled) " +
-      "and 'is_project' (mark projects with yes for the Projects leaderboard).\n" +
-      "· A Reports tab collects members' \"I was there\" messages from the app " +
-      "(remember to deploy the Web App and paste its URL into the app's config).\n" +
-      "· EntryPad and all dropdowns were rebuilt."
-    );
-  } catch (ignored) {}
+  ss.toast(
+    "Sheet upgrade complete. Use Rotary Tools > Add/backfill connected member columns " +
+      "to fill existing rows in the background." +
+      (addedSettings.length > 0
+        ? " Added Settings: " + addedSettings.join(", ") + "."
+        : ""),
+    "Rotary Tools",
+    10
+  );
 }
 
 // kept for anyone following older instructions
 function upgradeEntryPad() { upgradeSheet(); }
+
+var MEMBER_NAME_BACKFILL_KEY = "member_name_backfill_state_v1";
+var MEMBER_NAME_BACKFILL_BATCH = 250;
+
+// Starts a resumable migration for the three connected member columns. The
+// first small batch runs now; one-shot triggers continue in the background.
+// No individual execution rewrites more than MEMBER_NAME_BACKFILL_BATCH rows.
+function upgradeMemberNameColumns() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  ["Members", "Attendance", "EarlyBird"].forEach(function (name) {
+    if (!ss.getSheetByName(name)) {
+      throw new Error('Tab "' + name + '" is missing. Run setupWorkbook first.');
+    }
+  });
+  ensureMemberColumns_(ss);
+  buildLookup_(ss);
+  buildEntryPad_(ss);
+  applySmartValidations_(ss);
+  clearMemberNameBackfillTriggers_();
+  PropertiesService.getDocumentProperties().setProperty(
+    MEMBER_NAME_BACKFILL_KEY,
+    JSON.stringify({ sheetIndex: 0, nextRow: 2, updated: 0 })
+  );
+  continueMemberNameBackfill_();
+  var message =
+    "Connected member columns and sortable EntryPad are ready. " +
+    "Existing rows are backfilling in the background.";
+  ss.toast(message, "Rotary Tools", 8);
+}
+
+function continueMemberNameBackfill_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    var props = PropertiesService.getDocumentProperties();
+    var raw = props.getProperty(MEMBER_NAME_BACKFILL_KEY);
+    if (!raw) return;
+
+    var state = JSON.parse(raw);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetNames = ["Attendance", "EarlyBird"];
+    ensureMemberColumns_(ss);
+
+    while (state.sheetIndex < sheetNames.length) {
+      var sh = ss.getSheetByName(sheetNames[state.sheetIndex]);
+      var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+        .map(function (h) { return String(h).trim().toLowerCase(); });
+      var idCol = headers.indexOf("member_id") + 1;
+      var nameCol = headers.indexOf("member_name") + 1;
+      var nicknameCol = headers.indexOf("member_nickname") + 1;
+      var lastRow = sh.getLastRow();
+
+      if (state.nextRow > lastRow) {
+        state.sheetIndex++;
+        state.nextRow = 2;
+        continue;
+      }
+
+      var count = Math.min(MEMBER_NAME_BACKFILL_BATCH, lastRow - state.nextRow + 1);
+      var index = buildMemberIndex_(ss);
+      var refs = sh.getRange(state.nextRow, idCol, count, 1).getValues();
+      var fields = refs.map(function (row) {
+        var member = memberForRef_(index, row[0]);
+        return member
+          ? [member.id, member.name, member.nickname]
+          : [String(row[0] || "").trim(), "", ""];
+      });
+      sh.getRange(state.nextRow, idCol, count, 3).setValues(fields);
+      state.nextRow += count;
+      state.updated += count;
+      props.setProperty(MEMBER_NAME_BACKFILL_KEY, JSON.stringify(state));
+      ss.toast(
+        "Backfilled " + state.updated + " rows so far. Continuing automatically…",
+        "Rotary Tools",
+        5
+      );
+      scheduleMemberNameBackfill_();
+      return;
+    }
+
+    props.deleteProperty(MEMBER_NAME_BACKFILL_KEY);
+    clearMemberNameBackfillTriggers_();
+    ss.toast(
+      "Connected member-field backfill complete: " + state.updated + " rows checked.",
+      "Rotary Tools",
+      10
+    );
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function scheduleMemberNameBackfill_() {
+  ScriptApp.newTrigger("continueMemberNameBackfill_")
+    .timeBased()
+    .after(15000)
+    .create();
+}
+
+function clearMemberNameBackfillTriggers_() {
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === "continueMemberNameBackfill_") {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+}
 
 function ensureMeetingsColumns_(ss) {
   var sh = ss.getSheetByName("Meetings");
@@ -367,7 +625,178 @@ function ensureMeetingsColumns_(ss) {
   }
   dropdownAllowBlank_(sh, col, ["yes", "no"]);
 
+  // report_week: optional override for the four-column Rotary report.
+  // Regular meetings are assigned in date order when this is blank.
+  var headers3 = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (h) {
+    return String(h).trim().toLowerCase();
+  });
+  col = headers3.indexOf("report_week") + 1;
+  if (col === 0) {
+    col = sh.getLastColumn() + 1;
+    sh.getRange(1, col).setValue("report_week")
+      .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  }
+  dropdownAllowBlank_(sh, col, ["1", "2", "3", "4"]);
+  sh.setColumnWidth(col, 105);
+
   return statusCol;
+}
+
+// Keeps three connected member fields together in each attendance data tab:
+// member_id, member_name (LAST, FIRST MIDDLE), member_nickname.
+function ensureMemberColumns_(ss) {
+  ["Attendance", "EarlyBird"].forEach(function (sheetName) {
+    var sh = ss.getSheetByName(sheetName);
+    if (!sh) return;
+    var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+      .map(function (h) { return String(h).trim().toLowerCase(); });
+    var idCol = headers.indexOf("member_id") + 1;
+    if (!idCol) return;
+    var changed = false;
+
+    // Migrate the short-lived surname-only version in place.
+    if (headers[idCol] === "member_last_name") {
+      sh.getRange(1, idCol + 1).setValue("member_name");
+      headers[idCol] = "member_name";
+      changed = true;
+    }
+    if (headers[idCol] !== "member_name") {
+      sh.insertColumnAfter(idCol);
+      headers.splice(idCol, 0, "member_name");
+      changed = true;
+    }
+    if (headers[idCol + 1] !== "member_nickname") {
+      sh.insertColumnAfter(idCol + 1);
+      changed = true;
+    }
+
+    sh.getRange(1, idCol + 1, 1, 2)
+      .setValues([["member_name", "member_nickname"]])
+      .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+    // Inserted columns can inherit the member-ID dropdown, which causes
+    // "input must fall within specified range" on valid names.
+    if (changed) {
+      var validationRows = Math.min(
+        sh.getMaxRows() - 1,
+        Math.max(sh.getLastRow() - 1 + CAPACITY_CUSHION, CAPACITY_CUSHION)
+      );
+      sh.getRange(2, idCol + 1, validationRows, 2).clearDataValidations();
+    }
+    sh.setColumnWidth(idCol + 1, 180);
+    sh.setColumnWidth(idCol + 2, 140);
+  });
+}
+
+function buildMemberIndex_(ss) {
+  var sh = ss.getSheetByName("Members");
+  var out = {};
+  if (!sh || sh.getLastRow() < 2) return out;
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim().toLowerCase(); });
+  var idIdx = headers.indexOf("member_id");
+  var firstIdx = headers.indexOf("first_name");
+  var lastIdx = headers.indexOf("last_name");
+  var nickIdx = headers.indexOf("nickname");
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+
+  function add(ref, member) {
+    var key = String(ref || "").trim().toLowerCase().replace(/\s+/g, " ");
+    if (!key) return;
+    if (!Object.prototype.hasOwnProperty.call(out, key)) {
+      out[key] = member;
+    } else if (out[key] && out[key].id !== member.id) {
+      out[key] = null;
+    }
+  }
+
+  rows.forEach(function (row) {
+    var id = String(row[idIdx] || "").trim();
+    if (!id) return;
+    var first = String(row[firstIdx] || "").trim();
+    var last = String(row[lastIdx] || "").trim();
+    var nickname = String(row[nickIdx] || "").trim();
+    var middleIdx = headers.indexOf("middle_name");
+    var middle = middleIdx >= 0 ? String(row[middleIdx] || "").trim() : "";
+    var full = [first, middle, last].filter(String).join(" ");
+    var name = (last ? last + ", " : "") + [first, middle].filter(String).join(" ");
+    var member = {
+      id: id, first: first, middle: middle, last: last,
+      nickname: nickname, full: full, name: name
+    };
+    add(id, member);
+    add(nickname, member);
+    add(last, member);
+    add(name, member);
+    add(full, member);
+    add(last + " " + first, member);
+    add(last + ", " + first, member);
+  });
+  return out;
+}
+
+function memberForRef_(index, ref) {
+  var raw = String(ref || "").trim();
+  if (!raw) return null;
+  var id = extractMemberId_(raw);
+  var key = String(id || raw).trim().toLowerCase().replace(/\s+/g, " ");
+  return index[key] || null;
+}
+
+function backfillMemberFields_(ss, sh, idCol) {
+  var lastRow = sh.getLastRow();
+  if (lastRow < 2) return;
+  var index = buildMemberIndex_(ss);
+  var refs = sh.getRange(2, idCol, lastRow - 1, 1).getValues();
+  var fields = refs.map(function (row) {
+    var member = memberForRef_(index, row[0]);
+    return member
+      ? [member.id, member.name, member.nickname]
+      : [String(row[0] || "").trim(), "", ""];
+  });
+  sh.getRange(2, idCol, fields.length, 3).setValues(fields);
+}
+
+function syncMemberFieldsForEdit_(e) {
+  var sh = e.range.getSheet();
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim().toLowerCase(); });
+  var idCol = headers.indexOf("member_id") + 1;
+  var nameCol = headers.indexOf("member_name") + 1;
+  var nicknameCol = headers.indexOf("member_nickname") + 1;
+  if (!idCol || nameCol !== idCol + 1 || nicknameCol !== idCol + 2) return;
+  if (e.range.getColumn() > nicknameCol || e.range.getLastColumn() < idCol) return;
+  var firstRow = Math.max(2, e.range.getRow());
+  var lastRow = e.range.getLastRow();
+  if (lastRow < firstRow) return;
+  var index = buildMemberIndex_(e.source);
+  var rows = sh.getRange(firstRow, idCol, lastRow - firstRow + 1, 3).getValues();
+  var editedStart = e.range.getColumn();
+  var editedEnd = e.range.getLastColumn();
+  var unresolved = 0;
+  var connected = rows.map(function (row) {
+    var refs = [];
+    if (editedStart <= idCol && editedEnd >= idCol) refs.push(row[0]);
+    if (editedStart <= nameCol && editedEnd >= nameCol) refs.push(row[1]);
+    if (editedStart <= nicknameCol && editedEnd >= nicknameCol) refs.push(row[2]);
+    var ref = refs.filter(function (value) {
+      return String(value || "").trim() !== "";
+    })[0];
+    if (ref === undefined) return row; // all three connected fields were cleared
+    var member = memberForRef_(index, ref);
+    if (!member) {
+      unresolved++;
+      return row;
+    }
+    return [member.id, member.name, member.nickname];
+  });
+  sh.getRange(firstRow, idCol, connected.length, 3).setValues(connected);
+  if (unresolved > 0) {
+    e.source.toast(
+      unresolved + " member value(s) were ambiguous or not found. Enter the Member ID.",
+      "Rotary Tools",
+      8
+    );
+  }
 }
 
 function dropdownAllowBlank_(sheet, col, values) {
@@ -376,6 +805,40 @@ function dropdownAllowBlank_(sheet, col, values) {
     .setAllowInvalid(true) // blank cells are fine
     .build();
   sheet.getRange(2, col, sheet.getMaxRows() - 1, 1).setDataValidation(rule);
+}
+
+// Adds any Settings rows that are missing (new keys introduced by later
+// script versions). NEVER changes a value that already exists — the club's
+// own numbers always win. Returns the list of keys it added.
+function ensureSettings_(ss) {
+  var sh = ss.getSheetByName("Settings");
+  if (!sh) return [];
+  var wanted = [
+    ["club_name", "Rotary Club of Mutya ng Santa Maria"],
+    ["monthly_required_attendance", "4"],
+    ["monthly_required_percent", "50"],
+    ["club_goal_percent", "50"],
+    ["early_bird_slots_per_regular_meeting", "10"],
+    ["timezone", "Asia/Manila"],
+    ["current_rotary_year_start", "2026-07-01"],
+    ["current_rotary_year_end", "2027-06-30"],
+  ];
+  var last = sh.getLastRow();
+  var have = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) {
+      var k = String(r[0]).trim();
+      if (k) have[k] = true;
+    });
+  }
+  var added = [];
+  wanted.forEach(function (pair) {
+    if (!have[pair[0]]) {
+      sh.appendRow(pair);
+      added.push(pair[0]);
+    }
+  });
+  return added;
 }
 
 function ensureReportsTab_(ss) {
@@ -390,17 +853,280 @@ function ensureReportsTab_(ss) {
   sh.setColumnWidth(6, 280);
 }
 
+// ================================================================
+//  MONTHLY ROTARY ATTENDANCE REPORT
+//  Mirrors the four-week form used for club documentation.
+// ================================================================
+
+function ensureAttendanceReportTab_(ss) {
+  var sh = ss.getSheetByName("AttendanceReport");
+  if (sh) return sh;
+  sh = ss.insertSheet("AttendanceReport");
+  sh.getRange("A1").setValue("Report month (YYYY-MM)").setFontWeight("bold");
+  sh.getRange("B1").setValue(
+    Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM")
+  ).setBackground("#FFF2CC").setNumberFormat("@");
+  sh.getRange("A2").setValue(
+    "Weeks follow scheduled regular meetings. report_week (1–4) can override an assignment."
+  ).setFontStyle("italic").setFontColor("#5F6B7A");
+  sh.getRange("A2:E2").merge();
+  sh.setFrozenRows(2);
+  return sh;
+}
+
+function tableObjects_(sh) {
+  if (!sh || sh.getLastRow() < 2) return [];
+  var values = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var headers = values.shift().map(function (value) {
+    return String(value || "").trim().toLowerCase();
+  });
+  return values.map(function (row) {
+    var out = {};
+    headers.forEach(function (header, index) {
+      if (header) out[header] = row[index];
+    });
+    return out;
+  });
+}
+
+function refreshAttendanceReport() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sh = ensureAttendanceReportTab_(ss);
+  var month = String(sh.getRange("B1").getDisplayValue() || "").trim();
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    month = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM");
+    sh.getRange("B1").setValue(month);
+  }
+
+  var eligible = {};
+  tableObjects_(ss.getSheetByName("Members")).forEach(function (member) {
+    var status = String(member.active_status || "Active").trim().toLowerCase();
+    var id = String(member.member_id || "").trim();
+    if (id && status === "active") eligible[id] = true;
+  });
+
+  function assignedWeek_(meeting) {
+    var value = parseInt(String(meeting.report_week || "").trim(), 10);
+    return value >= 1 && value <= 4 ? value - 1 : -1;
+  }
+  function dayNumber_(date) {
+    return Math.floor(new Date(date + "T00:00:00Z").getTime() / 86400000);
+  }
+  function meetingLabel_(meeting) {
+    return String(meeting.activity_title || "Untitled") + " (" +
+      normDate_(meeting.date) + "; " + String(meeting.meeting_id || "") + ")";
+  }
+
+  var allMeetings = tableObjects_(ss.getSheetByName("Meetings")).filter(function (meeting) {
+    var date = normDate_(meeting.date);
+    if (!date || date.slice(0, 7) !== month) return false;
+    return String(meeting.status || "").trim().toLowerCase() !== "cancelled";
+  }).sort(function (a, b) {
+    return normDate_(a.date).localeCompare(normDate_(b.date)) ||
+      String(a.meeting_id || "").localeCompare(String(b.meeting_id || ""));
+  });
+  var regular = allMeetings.filter(function (meeting) {
+    return String(meeting.meeting_type || "").trim().toLowerCase() === "regular";
+  });
+  var other = allMeetings.filter(function (meeting) {
+    return String(meeting.meeting_type || "").trim().toLowerCase() !== "regular";
+  });
+  var regularMeetings = [[], [], [], []];
+  var makeupMeetings = [[], [], [], []];
+  var inferredMakeups = [{}, {}, {}, {}];
+  var usedWeeks = {};
+  var warnings = [];
+
+  regular.filter(function (meeting) {
+    return assignedWeek_(meeting) >= 0;
+  }).forEach(function (meeting) {
+    var week = assignedWeek_(meeting);
+    regularMeetings[week].push(meeting);
+    usedWeeks[week] = true;
+  });
+  regular.filter(function (meeting) {
+    return assignedWeek_(meeting) < 0;
+  }).forEach(function (meeting) {
+    var week = -1;
+    for (var candidate = 0; candidate < 4; candidate++) {
+      if (!usedWeeks[candidate]) { week = candidate; break; }
+    }
+    if (week < 0) {
+      warnings.push(meetingLabel_(meeting) + " is a fifth regular meeting and is excluded.");
+      return;
+    }
+    regularMeetings[week].push(meeting);
+    usedWeeks[week] = true;
+  });
+
+  other.forEach(function (meeting) {
+    var week = assignedWeek_(meeting);
+    var inferred = false;
+    if (week < 0) {
+      var closest = null;
+      for (var candidate = 0; candidate < 4; candidate++) {
+        regularMeetings[candidate].forEach(function (regularMeeting) {
+          var distance = Math.abs(
+            dayNumber_(normDate_(meeting.date)) - dayNumber_(normDate_(regularMeeting.date))
+          );
+          if (!closest || distance < closest.distance ||
+              (distance === closest.distance && candidate < closest.week)) {
+            closest = { week: candidate, distance: distance };
+          }
+        });
+      }
+      if (!closest) {
+        warnings.push(meetingLabel_(meeting) + " has no regular meeting to attach to.");
+        return;
+      }
+      week = closest.week;
+      inferred = true;
+    }
+    if (regularMeetings[week].length === 0) {
+      warnings.push(meetingLabel_(meeting) + " is assigned to Week " + (week + 1) +
+        ", which has no regular meeting.");
+      return;
+    }
+    makeupMeetings[week].push(meeting);
+    if (inferred) inferredMakeups[week][String(meeting.meeting_id || "")] = true;
+  });
+
+  var regularByWeek = [{}, {}, {}, {}];
+  var makeupByWeek = [{}, {}, {}, {}];
+  for (var assignmentWeek = 0; assignmentWeek < 4; assignmentWeek++) {
+    regularMeetings[assignmentWeek].forEach(function (meeting) {
+      regularByWeek[assignmentWeek][String(meeting.meeting_id || "").trim()] = true;
+    });
+    makeupMeetings[assignmentWeek].forEach(function (meeting) {
+      makeupByWeek[assignmentWeek][String(meeting.meeting_id || "").trim()] = true;
+    });
+  }
+
+  var present = [{}, {}, {}, {}];
+  var makeup = [{}, {}, {}, {}];
+  var memberIndex = buildMemberIndex_(ss);
+  var memberNames = {};
+  Object.keys(memberIndex).forEach(function (key) {
+    var member = memberIndex[key];
+    if (member && member.id) memberNames[member.id] = member.name || member.nickname || member.id;
+  });
+  tableObjects_(ss.getSheetByName("Attendance")).forEach(function (row) {
+    var member = memberForRef_(memberIndex, row.member_id);
+    if (!member || !eligible[member.id]) return;
+    var rawMeeting = String(row.meeting_id || "").trim();
+    var meetingId = extractMeetingId_(rawMeeting) || rawMeeting;
+    var creditText = String(row.credit_given == null ? "" : row.credit_given).trim();
+    var hasCredit = creditText === "" || (parseFloat(creditText) || 0) > 0;
+    for (var week = 0; week < 4; week++) {
+      if (regularByWeek[week][meetingId]) present[week][member.id] = true;
+      if (hasCredit && makeupByWeek[week][meetingId]) makeup[week][member.id] = true;
+    }
+  });
+
+  var rows = [
+    ["Attendance measure"].concat([0, 1, 2, 3].map(function (week) {
+      if (regularMeetings[week].length === 0) return "Week " + (week + 1) + " — Not scheduled";
+      var dates = regularMeetings[week].map(function (meeting) {
+        return normDate_(meeting.date);
+      }).join(" / ");
+      return "Week " + (week + 1) + " — " + dates;
+    })),
+    ["Members Present"],
+    ["Members with Valid Make-Up"],
+    ["Total Attendance"],
+  ];
+  var total = 0;
+  var scheduledWeekCount = 0;
+  for (var i = 0; i < 4; i++) {
+    if (regularMeetings[i].length === 0) {
+      rows[1].push("—");
+      rows[2].push("—");
+      rows[3].push("—");
+      continue;
+    }
+    scheduledWeekCount++;
+    var presentCount = Object.keys(present[i]).length;
+    var makeupCount = Object.keys(makeup[i]).filter(function (id) {
+      return !present[i][id];
+    }).length;
+    rows[1].push(presentCount);
+    rows[2].push(makeupCount);
+    rows[3].push(presentCount + makeupCount);
+    total += presentCount + makeupCount;
+  }
+  var average = scheduledWeekCount ? total / scheduledWeekCount : 0;
+  var activeCount = Object.keys(eligible).length;
+  var rate = activeCount ? average / activeCount : 0;
+
+  sh.getRange("A3:E40").clearContent().clearFormat();
+  sh.getRange(3, 1, rows.length, 5).setValues(rows);
+  sh.getRange("A3:E3").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  sh.getRange("A4:A6").setFontWeight("bold");
+  sh.getRange("A6:E6").setFontWeight("bold").setBackground("#EAF1FB");
+  sh.getRange("A8:B10").setValues([
+    ["Average Attendance for the Month", average],
+    ["Average Attendance Rate", rate],
+    ["Scheduled reporting weeks", scheduledWeekCount],
+  ]);
+  sh.getRange("A8:A10").setFontWeight("bold");
+  sh.getRange("B8").setNumberFormat("0.0");
+  sh.getRange("B9").setNumberFormat("0.0%");
+  sh.setColumnWidth(1, 250);
+  sh.setColumnWidths(2, 4, 95);
+  sh.getRange("A3:E6").setBorder(true, true, true, true, true, true);
+  sh.getRange("A8:B10").setBorder(true, true, true, true, true, true);
+
+  var detailRows = [["AUDIT TRAIL — WHERE EACH NUMBER COMES FROM", "", "", "", ""]];
+  for (var detailWeek = 0; detailWeek < 4; detailWeek++) {
+    var regularLabels = regularMeetings[detailWeek].map(meetingLabel_).join("\n") || "Not scheduled";
+    var presentNames = Object.keys(present[detailWeek]).map(function (id) {
+      return memberNames[id] || id;
+    }).sort().join(", ") || "None recorded";
+    var makeupLabels = makeupMeetings[detailWeek].map(function (meeting) {
+      var id = String(meeting.meeting_id || "");
+      return meetingLabel_(meeting) + (inferredMakeups[detailWeek][id] ? " [week inferred]" : "");
+    }).join("\n") || "None";
+    var validMakeupNames = Object.keys(makeup[detailWeek]).filter(function (id) {
+      return !present[detailWeek][id];
+    }).map(function (id) {
+      return memberNames[id] || id;
+    }).sort().join(", ") || "None recorded";
+    detailRows.push(["Week " + (detailWeek + 1), "Regular meeting(s)", regularLabels, "", ""]);
+    detailRows.push(["", "Present (" + Object.keys(present[detailWeek]).length + ")", presentNames, "", ""]);
+    detailRows.push(["", "Make-up activities", makeupLabels, "", ""]);
+    detailRows.push(["", "Valid make-up members (" +
+      Object.keys(makeup[detailWeek]).filter(function (id) {
+        return !present[detailWeek][id];
+      }).length + ")", validMakeupNames, "", ""]);
+  }
+  if (warnings.length > 0) {
+    detailRows.push(["SETUP WARNINGS", "", warnings.join("\n"), "", ""]);
+  }
+  sh.getRange(12, 1, detailRows.length, 5).setValues(detailRows);
+  sh.getRange("A12:E12").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  sh.getRange(13, 1, detailRows.length - 1, 3).setWrap(true).setVerticalAlignment("top");
+  sh.setColumnWidth(2, 190);
+  sh.setColumnWidth(3, 520);
+  return sh;
+}
+
 function buildLookup_(ss) {
   var old = ss.getSheetByName("Lookup");
   if (old) ss.deleteSheet(old);
   var sh = ss.insertSheet("Lookup");
-  sh.getRange("A1:D1").setValues([["member_label", "member_id", "meeting_label", "meeting_id"]])
-    .setFontWeight("bold");
+  sh.getRange("A1:G1").setValues([[
+    "member_label", "member_id", "member_name", "last_name",
+    "nickname", "meeting_label", "meeting_id"
+  ]]).setFontWeight("bold");
   // Live formulas: new members/events show up in dropdowns automatically.
+  // Members are SORTED by last name (then first name), so the EntryPad
+  // roster and all name dropdowns stay alphabetical no matter where a
+  // new member's row is added on the Members tab.
   sh.getRange("A2").setFormula(
-    '=ARRAYFORMULA(IF(Members!A2:A="",,Members!E2:E&" · "&Members!C2:C&" "&Members!B2:B&" · "&Members!A2:A))'
+    '=SORT(FILTER({Members!E2:E&" · "&Members!C2:C&" "&Members!B2:B&" · "&Members!A2:A, ' +
+    'Members!A2:A, Members!B2:B&", "&Members!C2:C&IF(Members!D2:D="",""," "&Members!D2:D), ' +
+    'Members!B2:B, Members!E2:E}, Members!A2:A<>""), 4, TRUE, 3, TRUE)'
   );
-  sh.getRange("B2").setFormula('=ARRAYFORMULA(IF(Members!A2:A="",,Members!A2:A))');
 
   // Event labels skip cancelled events so they can't be picked on EntryPad.
   var meetings = ss.getSheetByName("Meetings");
@@ -412,11 +1138,11 @@ function buildLookup_(ss) {
     var letter = columnLetter_(statusIdx + 1);
     cancelledTest = '+(LOWER(Meetings!' + letter + '2:' + letter + ')="cancelled")';
   }
-  sh.getRange("C2").setFormula(
+  sh.getRange("F2").setFormula(
     '=ARRAYFORMULA(IF((Meetings!A2:A="")' + cancelledTest +
     ',,Meetings!B2:B&" · "&Meetings!D2:D&" · "&Meetings!A2:A))'
   );
-  sh.getRange("D2").setFormula('=ARRAYFORMULA(IF(Meetings!A2:A="",,Meetings!A2:A))');
+  sh.getRange("G2").setFormula('=ARRAYFORMULA(IF(Meetings!A2:A="",,Meetings!A2:A))');
   sh.hideSheet();
 }
 
@@ -437,63 +1163,113 @@ function buildEntryPad_(ss) {
 
   // Header area
   sh.getRange("A1").setValue("Event:").setFontWeight("bold");
-  sh.getRange("B1:E1").merge();
+  sh.getRange("B1:G1").merge();
   sh.getRange("B1")
     .setBackground("#FFF3CC")
     .setDataValidation(
       SpreadsheetApp.newDataValidation()
-        .requireValueInRange(ss.getRange("Lookup!C2:C"), true)
+        .requireValueInRange(ss.getRange("Lookup!F2:F"), true)
         .setAllowInvalid(false)
         .setHelpText("Pick the meeting or activity. Type part of its title or date to search.")
         .build()
     );
   sh.getRange("A2").setValue("Tick to SAVE →").setFontWeight("bold");
   sh.getRange("B2").insertCheckboxes().setBackground("#D7F2DC");
-  sh.getRange("C2:E2").merge();
+  sh.getRange("C2:G2").merge();
   sh.getRange("C2").setValue("Pick the event, tick attendees, then tick SAVE.").setFontStyle("italic");
   sh.getRange("A3").setValue("EB rank = Early Bird order of arrival (1–10), regular meetings only. Credit blank = 1.")
     .setFontSize(9).setFontColor("#666666");
-  sh.getRange("A3:E3").merge();
+  sh.getRange("A3:G3").merge();
 
   // Table headers
-  sh.getRange("A4:E4").setValues([["Present", "Member", "EB rank", "Credit", "Notes"]])
+  sh.getRange("A4:G4").setValues([[
+    "Present", "Full name (Last, First)", "Nickname", "Member ID", "EB rank", "Credit", "Notes"
+  ]])
     .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
   sh.setFrozenRows(4);
 
   var n = PAD_LAST_ROW - PAD_FIRST_ROW + 1;
   sh.getRange(PAD_FIRST_ROW, 1, n, 1).insertCheckboxes();
-  sh.getRange(PAD_FIRST_ROW, 2, 1, 1).setFormula('=ARRAYFORMULA(Lookup!A2:A' + (n + 1) + ')');
-  sh.getRange(PAD_FIRST_ROW, 3, n, 1).setDataValidation(
+
+  var members = ss.getSheetByName("Members");
+  var memberHeaders = members.getRange(1, 1, 1, members.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim().toLowerCase(); });
+  var idIdx = memberHeaders.indexOf("member_id");
+  var lastIdx = memberHeaders.indexOf("last_name");
+  var firstIdx = memberHeaders.indexOf("first_name");
+  var middleIdx = memberHeaders.indexOf("middle_name");
+  var nickIdx = memberHeaders.indexOf("nickname");
+  var memberRows = members.getRange(
+    2, 1, Math.max(members.getLastRow() - 1, 1), members.getLastColumn()
+  ).getValues().map(function (row) {
+    return [
+      String(row[lastIdx] || "").trim() + ", " +
+        [row[firstIdx], row[middleIdx]].map(function (value) {
+          return String(value || "").trim();
+        }).filter(String).join(" "),
+      String(row[nickIdx] || "").trim(),
+      String(row[idIdx] || "").trim()
+    ];
+  }).filter(function (row) {
+    return row[2] !== "";
+  }).sort(function (a, b) {
+    return a[0].localeCompare(b[0]) ||
+      a[1].localeCompare(b[1]) ||
+      a[2].localeCompare(b[2]);
+  }).slice(0, n);
+  if (memberRows.length > 0) {
+    sh.getRange(PAD_FIRST_ROW, 2, memberRows.length, 3).setValues(memberRows);
+  }
+
+  sh.getRange(PAD_FIRST_ROW, 5, n, 1).setDataValidation(
     SpreadsheetApp.newDataValidation()
       .requireValueInList(["1","2","3","4","5","6","7","8","9","10"], true)
       .setAllowInvalid(false)
       .build()
   );
   sh.setColumnWidth(1, 64);
-  sh.setColumnWidth(2, 320);
-  sh.setColumnWidth(3, 70);
-  sh.setColumnWidth(4, 60);
-  sh.setColumnWidth(5, 180);
-  sh.getRange(PAD_FIRST_ROW, 2, n, 1).protect()
-    .setDescription("Member labels come from the Members tab — don't type here.")
+  sh.setColumnWidth(2, 180);
+  sh.setColumnWidth(3, 130);
+  sh.setColumnWidth(4, 90);
+  sh.setColumnWidth(5, 70);
+  sh.setColumnWidth(6, 60);
+  sh.setColumnWidth(7, 180);
+  sh.getRange(PAD_FIRST_ROW, 2, n, 3).protect()
+    .setDescription("Member fields come from the Members tab — sort, but don't type here.")
     .setWarningOnly(true);
+  sh.getRange(4, 1, n + 1, 7).createFilter();
+}
+
+function refreshEntryPadRoster() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  buildLookup_(ss);
+  buildEntryPad_(ss);
+  ss.toast(
+    "EntryPad roster refreshed. Sort by full name (last first), nickname, or ID.",
+    "Rotary Tools",
+    8
+  );
 }
 
 function applySmartValidations_(ss) {
-  // Attendance + EarlyBird: member and meeting columns accept BOTH the
-  // plain ID and the searchable label. Typing a nickname or surname
-  // brings up suggestions.
+  // Each member field gets suggestions from the matching Lookup column.
+  // Invalid values are allowed so onEdit can resolve typed IDs/names and
+  // explain ambiguous nicknames instead of rejecting the edit.
   var att = ss.getSheetByName("Attendance");
   var eb = ss.getSheetByName("EarlyBird");
-  // Open-ended ranges (no row number) so the dropdowns keep working no
-  // matter how many members or events accumulate over the years.
-  var memberSource = ss.getRange("Lookup!A2:B");   // labels + ids
-  var meetingSource = ss.getRange("Lookup!C2:D");
+  var idSource = ss.getRange("Lookup!B2:B");
+  var nameSource = ss.getRange("Lookup!C2:C");
+  var nicknameSource = ss.getRange("Lookup!E2:E");
+  var meetingSource = ss.getRange("Lookup!F2:G");
 
   smartDrop_(att, 1, meetingSource, "Type the meeting title, date, or ID.");
-  smartDrop_(att, 2, memberSource, "Type a nickname, name, or member ID.");
+  smartDrop_(att, 2, idSource, "Type or pick a member ID.");
+  smartDrop_(att, 3, nameSource, "Type or pick a full name (last name first).");
+  smartDrop_(att, 4, nicknameSource, "Type or pick a nickname.");
   smartDrop_(eb, 1, meetingSource, "Type the meeting title, date, or ID.");
-  smartDrop_(eb, 3, memberSource, "Type a nickname, name, or member ID.");
+  smartDrop_(eb, 3, idSource, "Type or pick a member ID.");
+  smartDrop_(eb, 4, nameSource, "Type or pick a full name (last name first).");
+  smartDrop_(eb, 5, nicknameSource, "Type or pick a nickname.");
 }
 
 function smartDrop_(sheet, col, sourceRange, help) {
@@ -502,7 +1278,11 @@ function smartDrop_(sheet, col, sourceRange, help) {
     .setAllowInvalid(true) // old plain-ID rows stay valid; app resolves both
     .setHelpText(help)
     .build();
-  sheet.getRange(2, col, sheet.getMaxRows() - 1, 1).setDataValidation(rule);
+  var rows = Math.min(
+    sheet.getMaxRows() - 1,
+    Math.max(sheet.getLastRow() - 1 + CAPACITY_CUSHION, CAPACITY_CUSHION)
+  );
+  sheet.getRange(2, col, rows, 1).setDataValidation(rule);
 }
 
 // ================================================================
@@ -524,7 +1304,7 @@ function setupWorkbook() {
 
   var old = ss.getSheets()[0];
   if (old && wanted.indexOf(old.getName()) === -1) {
-    old.setName("OLD July grid (reference)");
+    old.setName("Original sheet (reference)");
   }
 
   buildSettings_(ss);
@@ -534,15 +1314,16 @@ function setupWorkbook() {
   buildEarlyBird_(ss);
   ensureMeetingsColumns_(ss);
   ensureReportsTab_(ss);
+  ensureAttendanceReportTab_(ss);
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
+  refreshAttendanceReport();
 
   SpreadsheetApp.flush();
   SpreadsheetApp.getUi().alert(
-    "Done! The 5 data tabs are ready with your July data migrated, and the " +
-    "EntryPad tab is set up for fast attendance recording.\n\n" +
-    "Your old grid is kept as 'OLD July grid (reference)'."
+    "Done! The Mutya attendance tabs, sortable EntryPad, connected member-name " +
+    "columns, and AttendanceReport tab are ready with the existing July data."
   );
 }
 
@@ -577,6 +1358,8 @@ function buildSettings_(ss) {
   writeTable_(sh, ["setting_key", "setting_value"], [
     ["club_name", "Rotary Club of Mutya ng Santa Maria"],
     ["monthly_required_attendance", "4"],
+    ["monthly_required_percent", "50"],
+    ["club_goal_percent", "50"],
     ["early_bird_slots_per_regular_meeting", "10"],
     ["timezone", "Asia/Manila"],
     ["current_rotary_year_start", "2026-07-01"],
@@ -596,18 +1379,18 @@ function buildMembers_(ss) {
     data);
   textColumn_(sh, 7);
   textColumn_(sh, 8);
-  dropdown_(sh, 6, ["Active", "Inactive"]);
+  dropdown_(sh, 6, ["Active", "Inactive", "Honorary"]);
 }
 
 function buildMeetings_(ss) {
   var sh = ss.insertSheet("Meetings");
   var data = MEETINGS_.map(function (m) {
     // m = [id, date, type, title, is_project]
-    return [m[0], m[1], m[2], m[3], "", "1", "", "", m[4] || ""];
+    return [m[0], m[1], m[2], m[3], "", "1", "", "", m[4] || "", ""];
   });
   writeTable_(sh,
     ["meeting_id", "date", "meeting_type", "activity_title",
-     "location", "credit_value", "notes", "status", "is_project"],
+     "location", "credit_value", "notes", "status", "is_project", "report_week"],
     data);
   textColumn_(sh, 2);
   dropdown_(sh, 3, ["regular", "makeup", "special"]);
@@ -616,15 +1399,24 @@ function buildMeetings_(ss) {
 function buildAttendance_(ss) {
   var sh = ss.insertSheet("Attendance");
   var rows = ATTENDANCE_.map(function (pair) {
-    return [pair[0], pair[1], "1", ""];
+    return [pair[0], pair[1], "", "", "1", ""];
   });
-  writeTable_(sh, ["meeting_id", "member_id", "credit_given", "notes"], rows);
+  writeTable_(sh,
+    ["meeting_id", "member_id", "member_name", "member_nickname", "credit_given", "notes"],
+    rows);
+  backfillMemberFields_(ss, sh, 2);
+  sh.setColumnWidth(3, 180);
+  sh.setColumnWidth(4, 140);
 }
 
 function buildEarlyBird_(ss) {
   var sh = ss.insertSheet("EarlyBird");
-  writeTable_(sh, ["meeting_id", "rank", "member_id", "notes"], []);
+  writeTable_(sh,
+    ["meeting_id", "rank", "member_id", "member_name", "member_nickname", "notes"],
+    []);
   dropdown_(sh, 2, ["1","2","3","4","5","6","7","8","9","10"]);
+  sh.setColumnWidth(4, 180);
+  sh.setColumnWidth(5, 140);
 }
 
 // ---------------------------------------------------------- data

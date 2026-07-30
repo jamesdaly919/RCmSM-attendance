@@ -6,6 +6,7 @@ import Dashboard from "./components/Dashboard.jsx";
 import MemberPage from "./components/MemberPage.jsx";
 import EventsPage from "./components/EventsPage.jsx";
 import LeadersPage from "./components/LeadersPage.jsx";
+import AttendanceReportPage from "./components/AttendanceReportPage.jsx";
 
 function useHashRoute() {
   const [hash, setHash] = useState(window.location.hash || "#/");
@@ -82,6 +83,7 @@ export default function App() {
   if (section === "members") page = <MemberPage {...shared} memberId={param} />;
   else if (section === "events") page = <EventsPage {...shared} />;
   else if (section === "leaders") page = <LeadersPage {...shared} />;
+  else if (section === "report") page = <AttendanceReportPage {...shared} />;
   else page = <Dashboard {...shared} />;
 
   const navItems = [
@@ -89,6 +91,7 @@ export default function App() {
     ["#/members", "Members", "👤", section === "members"],
     ["#/events", "Events", "📅", section === "events"],
     ["#/leaders", "Leaders", "🏆", section === "leaders"],
+    ["#/report", "Report", "📋", section === "report"],
   ];
 
   return (

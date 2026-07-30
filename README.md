@@ -170,8 +170,12 @@ normally left blank (= not a project).
 
 ### Record attendance after an event — use the EntryPad tab
 
-The **EntryPad** tab shows the full roster once, with checkboxes. This is the
-fast way to record a whole meeting (attendance *and* Early Birds in one pass):
+The **EntryPad** tab shows the full roster as connected **Full name
+(Last, First)**, **Nickname**, and **Member ID** columns beside each checkbox.
+Use a header filter to sort the whole table without separating a member from
+her attendance fields. After adding members, use **Rotary Tools → Refresh
+sortable EntryPad roster**. This is the fast way to record a whole meeting
+(attendance *and* Early Birds in one pass):
 
 1. In the **yellow cell** at the top, pick the event. Type part of its title
    or date and Sheets suggests the match.
@@ -190,20 +194,17 @@ There's also a menu **Rotary Tools → Save EntryPad now** if you prefer.
 You never scroll through the long Attendance log — it just grows quietly in
 the background as the app's data source.
 
+The Attendance and EarlyBird tabs also keep connected **member_id**,
+**member_name**, and **member_nickname** columns together. Enter an
+unambiguous value in any one of those fields and the other two fill
+automatically; the ID remains authoritative.
+
 ### Fixing or adding single rows by hand
 
 You can still edit the **Attendance** and **EarlyBird** tabs directly — for a
-correction, a late report, or deleting a mistaken row. The member and meeting
-columns there accept **any of these**, with suggestions as you type:
-
-- a member ID — `M020`
-- a nickname — `TINA`
-- a full name — `MARIA CRISTINA IMPERIO` or `IMPERIO, MARIA CRISTINA`
-- the full dropdown label — `TINA · MARIA CRISTINA IMPERIO · M020`
-
-The web app understands all four forms. If it can't tell who you meant
-(misspelled, or two members share the text you typed), the app's Data check
-points at the exact row so you can fix it.
+correction, a late report, or deleting a mistaken row. Enter or select the
+member ID, full name, or nickname in its matching column. The connected fields
+fill automatically. If a value is ambiguous, enter the Member ID.
 
 Early Bird rules the app enforces: rank 1 = first to arrive, ranks 1–10 only,
 one award per row, regular meetings only.
@@ -216,6 +217,32 @@ one award per row, regular meetings only.
 3. That's it — the app recalculates everything by itself.
 4. Every July 1: update `current_rotary_year_start` and
    `current_rotary_year_end` in the **Settings** tab.
+
+### Monthly Rotary attendance report
+
+The web app's **Report** tab and the Google Sheet's **AttendanceReport** tab
+show the same four-week documentation table and an audit trail of meeting IDs,
+activities, and member names behind every figure:
+
+- Reporting weeks follow the month's scheduled, non-cancelled `regular`
+  meetings in date order—not fixed calendar-day ranges.
+- A month with only two regular meetings uses Week 1 and Week 2; Weeks 3 and 4
+  show “Not scheduled” and are excluded from the monthly average.
+- Use the optional **report_week** column on Meetings to assign any regular or
+  make-up activity explicitly to Week 1–4. When a make-up has no override, it
+  is assigned to the nearest scheduled regular meeting and marked “inferred”
+  in the audit trail.
+- Setting **status** to `cancelled` removes that meeting from the report.
+- Members Present = unique Active members recorded at the assigned regular
+  meeting; Valid Make-Up = unique credited Active members from assigned
+  non-regular activities, excluding anyone already present that week.
+- Total Attendance = Present + Valid Make-Up.
+- Monthly average = total attendance divided by the number of scheduled
+  reporting weeks, not automatically by four.
+
+Change `AttendanceReport!B1` to another `YYYY-MM` month to refresh the backend
+table. It also refreshes after EntryPad saves and relevant sheet edits, or from
+**Rotary Tools → Refresh monthly attendance report**.
 
 ---
 
@@ -250,6 +277,11 @@ event flips to Attended.
 Small maintenance point: if you later paste a **newer version of the script**,
 use **Deploy → Manage deployments → (pencil) → New version** so the existing
 URL keeps working — don't create a second deployment.
+
+For an existing workbook, paste the latest script, run **upgradeSheet**, then
+run **upgradeMemberNameColumns**. The first creates the AttendanceReport tab;
+the second adds the connected member columns and backfills existing rows in
+small background batches.
 
 ## Part 4 — How the app calculates things
 
@@ -310,6 +342,7 @@ URL keeps working — don't create a second deployment.
         ├── MemberPage.jsx  member lookup + gear ring
         ├── EventsPage.jsx  events & Early Bird lists
         ├── LeadersPage.jsx leaderboards
+        ├── AttendanceReportPage.jsx Rotary documentation table
         ├── Ring.jsx        the progress rings
         └── Shared.jsx      pickers, chips, data check
 ```

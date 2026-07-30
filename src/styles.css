@@ -241,11 +241,47 @@ button { font: inherit; cursor: pointer; }
   border: 1px solid var(--line); border-radius: 14px; padding: 14px;
   background: linear-gradient(180deg, #fff, #fbfcff);
 }
+.event-card__summary {
+  display: block; width: 100%; padding: 0; border: 0; background: transparent;
+  color: inherit; text-align: left; cursor: pointer;
+}
+.event-card__summary:focus-visible {
+  outline: 3px solid rgba(23, 69, 143, 0.3); outline-offset: 5px; border-radius: 8px;
+}
 .event-card__top {
   display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
 }
 .event-card__top strong { display: block; }
 .event-card__count { color: var(--slate); font-size: 14px; margin: 8px 0 0; }
+.event-card__expand {
+  display: inline-block; margin-top: 8px; color: var(--azure); font-size: 12px; font-weight: 700;
+}
+.event-roster {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line);
+}
+.event-roster h3 {
+  margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.event-roster h3 span {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 22px;
+  margin-left: 4px; padding: 2px 6px; border-radius: 999px; background: var(--mist);
+  color: var(--azure); font-size: 11px;
+}
+.event-roster__names {
+  list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 10px; background: #fff;
+}
+.event-roster__names li + li { border-top: 1px solid var(--line); }
+.event-roster__names button {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  width: 100%; padding: 7px 9px; border: 0; background: transparent;
+  color: var(--ink); text-align: left; font-size: 13px; cursor: pointer;
+}
+.event-roster__names button:hover { background: var(--mist); }
+.event-roster__names small { color: var(--slate); font-size: 11px; white-space: nowrap; }
+.event-roster__empty, .event-roster__cancelled { margin: 0; font-size: 13px; }
+.event-roster__cancelled { grid-column: 1 / -1; }
 .event-card__birds { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
 .event-card__birds-label {
   display: inline-block;
@@ -541,6 +577,95 @@ html, body { font-size: 17px; }
 .typetag--project { background: #e2f2e5; color: #226b32; }
 .event-card--cancelled { opacity: 0.62; }
 .event-card--cancelled .event-card__top strong { text-decoration: line-through; }
+
+@media (max-width: 600px) {
+  .event-roster { grid-template-columns: 1fr; }
+  .event-roster__names { max-height: 180px; }
+  .tabbar__item { font-size: 12px; padding-inline: 2px; }
+  .tabbar__icon { font-size: 20px; }
+}
+
+/* ---------- Rotary monthly attendance report ---------- */
+.report-intro { max-width: 780px; }
+.report-table-wrap {
+  overflow-x: auto; margin-top: 18px; border: 1px solid var(--line); border-radius: 14px;
+}
+.report-table {
+  width: 100%; min-width: 620px; border-collapse: collapse; background: #fff;
+}
+.report-table th, .report-table td {
+  padding: 13px 12px; border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line); text-align: center;
+}
+.report-table th:last-child, .report-table td:last-child { border-right: 0; }
+.report-table tbody tr:last-child th, .report-table tbody tr:last-child td { border-bottom: 0; }
+.report-table thead th {
+  background: var(--azure); color: #fff; font-size: 13px;
+}
+.report-table thead th small {
+  display: block; margin-top: 4px; color: rgba(255,255,255,0.78);
+  font-size: 10px; font-weight: 500;
+}
+.report-table thead th:first-child, .report-table tbody th { text-align: left; }
+.report-table tbody th { min-width: 230px; color: var(--ink); }
+.report-table__total { background: var(--mist); font-weight: 800; }
+.report-average {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px; margin-top: 14px;
+}
+.report-average > div {
+  display: grid; gap: 3px; padding: 16px; border: 1px solid var(--line);
+  border-radius: 14px; background: linear-gradient(135deg, #fff, var(--mist));
+}
+.report-average span { color: var(--slate); font-size: 13px; font-weight: 700; }
+.report-average strong { color: var(--azure); font-size: 30px; line-height: 1.1; }
+.report-average small { color: var(--slate); }
+.report-warnings {
+  margin-top: 14px; padding: 12px 14px; border: 1px solid #e6b85c;
+  border-radius: 12px; background: #fff8e5; color: #704d08; font-size: 13px;
+}
+.report-warnings ul { margin: 6px 0 0; padding-left: 20px; }
+.report-evidence {
+  margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line);
+}
+.report-evidence__head {
+  display: flex; align-items: end; justify-content: space-between; gap: 14px;
+}
+.report-evidence__head h3 { margin: 3px 0 0; }
+.report-evidence__head p { margin: 0; font-size: 12px; }
+.report-evidence__grid { display: grid; gap: 10px; margin-top: 14px; }
+.report-week-detail {
+  overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: #fff;
+}
+.report-week-detail summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 14px; cursor: pointer; background: var(--mist);
+}
+.report-week-detail summary span { color: var(--azure); font-size: 13px; font-weight: 700; }
+.report-week-detail__body { padding: 14px; }
+.report-week-detail dl {
+  display: grid; grid-template-columns: minmax(145px, 190px) minmax(0, 1fr);
+  gap: 10px 16px; margin: 0;
+}
+.report-week-detail dt { color: var(--slate); font-size: 12px; font-weight: 800; }
+.report-week-detail dd { margin: 0; font-size: 13px; line-height: 1.5; }
+.report-week-detail__empty { margin: 0; padding: 14px; font-size: 13px; }
+.report-source-list { list-style: none; margin: 0; padding: 0; }
+.report-source-list li + li { margin-top: 7px; }
+.report-source-list code {
+  display: inline-block; margin-left: 7px; padding: 1px 5px;
+  border-radius: 5px; background: #edf1f6; color: var(--slate); font-size: 10px;
+}
+.report-source-list small {
+  display: block; color: #8a6210; font-size: 10px; font-weight: 700;
+}
+@media (max-width: 520px) {
+  .report-average { grid-template-columns: 1fr; }
+  .report-evidence__head { display: block; }
+  .report-evidence__head p { margin-top: 6px; }
+  .report-week-detail dl { grid-template-columns: 1fr; gap: 3px; }
+  .report-week-detail dd + dt { margin-top: 8px; }
+}
 
 /* ============================================================
    Attendance at a glance — append this block to src/styles.css

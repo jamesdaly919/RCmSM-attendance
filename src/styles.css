@@ -707,6 +707,25 @@ html, body { font-size: 17px; }
 .report-average span { color: var(--slate); font-size: 13px; font-weight: 700; }
 .report-average strong { color: var(--azure); font-size: 30px; line-height: 1.1; }
 .report-average small { color: var(--slate); }
+.report-mode-summary {
+  margin-top: 20px; padding: 16px; border: 1px solid var(--line);
+  border-radius: 14px; background: #fff;
+}
+.report-mode-summary h3 { margin: 3px 0 0; }
+.report-mode-summary p { margin: 5px 0 0; font-size: 12px; }
+.report-mode-summary__grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px; margin-top: 13px;
+}
+.report-mode-card {
+  display: grid; gap: 4px; padding: 13px; border-radius: 11px;
+  border: 1px solid var(--line);
+}
+.report-mode-card span { color: var(--slate); font-size: 12px; font-weight: 750; }
+.report-mode-card strong { color: var(--azure); font-size: 26px; line-height: 1; }
+.report-mode-card--person { background: #edf7ef; }
+.report-mode-card--online { background: #edf4ff; }
+.report-mode-card--missing { background: #fff8e5; }
 .report-warnings {
   margin-top: 14px; padding: 12px 14px; border: 1px solid #e6b85c;
   border-radius: 12px; background: #fff8e5; color: #704d08; font-size: 13px;
@@ -748,6 +767,7 @@ html, body { font-size: 17px; }
 }
 @media (max-width: 520px) {
   .report-average { grid-template-columns: 1fr; }
+  .report-mode-summary__grid { grid-template-columns: 1fr; }
   .report-evidence__head { display: block; }
   .report-evidence__head p { margin-top: 6px; }
   .report-week-detail dl { grid-template-columns: 1fr; gap: 3px; }

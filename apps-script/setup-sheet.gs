@@ -219,6 +219,7 @@ function suffixFromTitle_(title, type) {
 
 var PAD_FIRST_ROW = 5;
 var PAD_LAST_ROW = 154; // room for 150 members
+var ATTENDANCE_MODES = ["In-person", "Online"];
 
 function saveEntryPad() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -246,27 +247,49 @@ function saveEntryPad() {
 
   // 2. Read the pad rows.
   var n = PAD_LAST_ROW - PAD_FIRST_ROW + 1;
-  var values = pad.getRange(PAD_FIRST_ROW, 1, n, 7).getValues();
-  // Present, Full name (last first), Nickname, Member ID, EB, Credit, Notes
+  var values = pad.getRange(PAD_FIRST_ROW, 1, n, 8).getValues();
+  // Present, Full name, Nickname, Member ID, Mode, EB, Credit, Notes
+
+  var missingModes = [];
+  values.forEach(function (row) {
+    if (row[0] !== true) return;
+    var mode = normalizeAttendanceMode_(row[4]);
+    if (!mode) {
+      missingModes.push(String(row[1] || row[2] || row[3] || "Unknown member"));
+    }
+  });
+  if (missingModes.length > 0) {
+    finishPad_(
+      pad,
+      status,
+      "⚠ Choose In-person or Online for every checked member. Missing: " +
+        missingModes.slice(0, 5).join(", ") +
+        (missingModes.length > 5 ? " +" + (missingModes.length - 5) + " more" : "") +
+        ". Nothing was saved."
+    );
+    return;
+  }
 
   // 3. What already exists (to skip duplicates)?
   ensureMemberColumns_(ss);
+  ensureAttendanceModeColumn_(ss);
   var att = ss.getSheetByName("Attendance");
   var eb = ss.getSheetByName("EarlyBird");
   var memberIndex = buildMemberIndex_(ss);
-  var existingPairs = existingPairs_(att, 1, 2);          // meeting|member
+  var existingAttendance = existingAttendanceRows_(att);
   var existingEB = existingPairs_(eb, 1, 3);              // meeting|member
   var existingRanks = existingMeetingValues_(eb, 1, 2);   // meeting|rank
 
-  var attRows = [], ebRows = [];
+  var attRows = [], ebRows = [], modeUpdates = [];
   var skippedDup = 0, skippedBad = 0, ebIgnored = 0;
 
   for (var i = 0; i < values.length; i++) {
     var present = values[i][0] === true;
     var memberId = String(values[i][3] || "").trim();
-    var ebRank = String(values[i][4] || "").trim();
-    var credit = String(values[i][5] || "").trim();
-    var notes = String(values[i][6] || "").trim();
+    var attendanceMode = normalizeAttendanceMode_(values[i][4]);
+    var ebRank = String(values[i][5] || "").trim();
+    var credit = String(values[i][6] || "").trim();
+    var notes = String(values[i][7] || "").trim();
     if (!present) {
       if (ebRank) ebIgnored++; // rank typed but not marked present
       continue;
@@ -276,18 +299,25 @@ function saveEntryPad() {
     memberId = member.id;
 
     var pairKey = meetingId + "|" + memberId;
-    if (existingPairs[pairKey]) {
-      skippedDup++;
+    if (existingAttendance.pairs[pairKey]) {
+      var existing = existingAttendance.pairs[pairKey];
+      if (normalizeAttendanceMode_(existing.mode) !== attendanceMode) {
+        modeUpdates.push({ row: existing.row, mode: attendanceMode });
+        existing.mode = attendanceMode;
+      } else {
+        skippedDup++;
+      }
     } else {
       attRows.push([
         meetingId,
         memberId,
         member.name,
         member.nickname,
+        attendanceMode,
         credit === "" ? "1" : credit,
         notes
       ]);
-      existingPairs[pairKey] = true;
+      existingAttendance.pairs[pairKey] = { row: null, mode: attendanceMode };
     }
 
     if (ebRank !== "") {
@@ -306,7 +336,19 @@ function saveEntryPad() {
   // 4. Append (growing the sheets first if they're near their row limit).
   if (attRows.length > 0) {
     ensureRows_(att, attRows.length);
-    att.getRange(att.getLastRow() + 1, 1, attRows.length, 6).setValues(attRows);
+    att.getRange(att.getLastRow() + 1, 1, attRows.length, 7).setValues(attRows);
+  }
+  if (modeUpdates.length > 0) {
+    var byMode = {};
+    modeUpdates.forEach(function (update) {
+      if (!byMode[update.mode]) byMode[update.mode] = [];
+      byMode[update.mode].push(
+        att.getRange(update.row, existingAttendance.modeCol).getA1Notation()
+      );
+    });
+    Object.keys(byMode).forEach(function (mode) {
+      att.getRangeList(byMode[mode]).setValue(mode);
+    });
   }
   if (ebRows.length > 0) {
     ensureRows_(eb, ebRows.length);
@@ -321,6 +363,10 @@ function saveEntryPad() {
   clearPadRows_(pad);
   var when = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "MMM d, HH:mm");
   var msg = "✔ Saved " + attRows.length + " attendance row" + (attRows.length === 1 ? "" : "s");
+  if (modeUpdates.length > 0) {
+    msg += " + updated mode on " + modeUpdates.length + " existing row" +
+      (modeUpdates.length === 1 ? "" : "s");
+  }
   if (ebRows.length > 0) msg += " + " + ebRows.length + " Early Bird" + (ebRows.length === 1 ? "" : "s");
   msg += " for " + meeting.title + " (" + when + ").";
   if (skippedDup > 0) msg += " Skipped " + skippedDup + " already recorded.";
@@ -388,7 +434,41 @@ function clearPadRows_(pad) {
   var falses = [];
   for (var i = 0; i < n; i++) falses.push([false]);
   pad.getRange(PAD_FIRST_ROW, 1, n, 1).setValues(falses); // untick Present
-  pad.getRange(PAD_FIRST_ROW, 5, n, 3).clearContent();    // EB, Credit, Notes
+  pad.getRange(PAD_FIRST_ROW, 5, n, 4).clearContent();    // Mode, EB, Credit, Notes
+}
+
+function normalizeAttendanceMode_(value) {
+  var mode = String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (mode === "online") return "Online";
+  if (mode === "in-person" || mode === "in person" || mode === "inperson") {
+    return "In-person";
+  }
+  return "";
+}
+
+function existingAttendanceRows_(sheet) {
+  var out = { pairs: {}, modeCol: 0 };
+  var last = sheet.getLastRow();
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0]
+    .map(function (header) { return String(header).trim().toLowerCase(); });
+  var meetingCol = headers.indexOf("meeting_id") + 1;
+  var memberCol = headers.indexOf("member_id") + 1;
+  out.modeCol = headers.indexOf("attendance_mode") + 1;
+  if (last < 2 || !meetingCol || !memberCol || !out.modeCol) return out;
+  var data = sheet.getRange(2, 1, last - 1, sheet.getLastColumn()).getValues();
+  data.forEach(function (row, index) {
+    var meeting = extractMeetingId_(row[meetingCol - 1]) ||
+      String(row[meetingCol - 1] || "").trim();
+    var member = extractMemberId_(row[memberCol - 1]) ||
+      String(row[memberCol - 1] || "").trim();
+    if (meeting && member && !out.pairs[meeting + "|" + member]) {
+      out.pairs[meeting + "|" + member] = {
+        row: index + 2,
+        mode: row[out.modeCol - 1]
+      };
+    }
+  });
+  return out;
 }
 
 function extractMemberId_(text) {
@@ -463,6 +543,7 @@ function upgradeSheet() {
   });
   ensureMeetingsColumns_(ss);
   ensureMemberColumns_(ss);
+  ensureAttendanceModeColumn_(ss);
   ensureReportsTab_(ss);
   ensureAttendanceReportTab_(ss);
   var addedSettings = ensureSettings_(ss);
@@ -727,6 +808,25 @@ function ensureMemberColumns_(ss) {
     sh.setColumnWidth(idCol + 1, 180);
     sh.setColumnWidth(idCol + 2, 140);
   });
+}
+
+function ensureAttendanceModeColumn_(ss) {
+  var sh = ss.getSheetByName("Attendance");
+  if (!sh) return 0;
+  var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (header) { return String(header).trim().toLowerCase(); });
+  var nicknameCol = headers.indexOf("member_nickname") + 1;
+  var modeCol = headers.indexOf("attendance_mode") + 1;
+  if (!modeCol) {
+    if (!nicknameCol) throw new Error("Attendance member_nickname column is missing.");
+    sh.insertColumnAfter(nicknameCol);
+    modeCol = nicknameCol + 1;
+    sh.getRange(1, modeCol).setValue("attendance_mode")
+      .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  }
+  dropdownAllowBlank_(sh, modeCol, ATTENDANCE_MODES);
+  sh.setColumnWidth(modeCol, 125);
+  return modeCol;
 }
 
 function buildMemberIndex_(ss) {
@@ -1146,6 +1246,10 @@ function refreshAttendanceReport() {
   var inferredMakeups = [{}, {}, {}, {}];
   var usedWeeks = {};
   var warnings = [];
+  var monthMeetingIds = {};
+  allMeetings.forEach(function (meeting) {
+    monthMeetingIds[String(meeting.meeting_id || "").trim()] = true;
+  });
 
   regular.filter(function (meeting) {
     return assignedWeek_(meeting) >= 0;
@@ -1214,6 +1318,8 @@ function refreshAttendanceReport() {
 
   var present = [{}, {}, {}, {}];
   var makeup = [{}, {}, {}, {}];
+  var modeTotals = { inPerson: 0, online: 0, unrecorded: 0 };
+  var countedModePairs = {};
   var memberIndex = buildMemberIndex_(ss);
   var memberNames = {};
   Object.keys(memberIndex).forEach(function (key) {
@@ -1227,6 +1333,14 @@ function refreshAttendanceReport() {
     var meetingId = extractMeetingId_(rawMeeting) || rawMeeting;
     var creditText = String(row.credit_given == null ? "" : row.credit_given).trim();
     var hasCredit = creditText === "" || (parseFloat(creditText) || 0) > 0;
+    var modePair = meetingId + "|" + member.id;
+    if (monthMeetingIds[meetingId] && !countedModePairs[modePair]) {
+      countedModePairs[modePair] = true;
+      var mode = normalizeAttendanceMode_(row.attendance_mode);
+      if (mode === "In-person") modeTotals.inPerson++;
+      else if (mode === "Online") modeTotals.online++;
+      else modeTotals.unrecorded++;
+    }
     for (var week = 0; week < 4; week++) {
       if (regularByWeek[week][meetingId]) present[week][member.id] = true;
       if (hasCredit && makeupByWeek[week][meetingId]) makeup[week][member.id] = true;
@@ -1273,18 +1387,21 @@ function refreshAttendanceReport() {
   sh.getRange("A3:E3").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
   sh.getRange("A4:A6").setFontWeight("bold");
   sh.getRange("A6:E6").setFontWeight("bold").setBackground("#EAF1FB");
-  sh.getRange("A8:B10").setValues([
+  sh.getRange("A8:B13").setValues([
     ["Average Attendance for the Month", average],
     ["Average Attendance Rate", rate],
     ["Scheduled reporting weeks", scheduledWeekCount],
+    ["In-person attendance records", modeTotals.inPerson],
+    ["Online attendance records", modeTotals.online],
+    ["Attendance mode not recorded", modeTotals.unrecorded],
   ]);
-  sh.getRange("A8:A10").setFontWeight("bold");
+  sh.getRange("A8:A13").setFontWeight("bold");
   sh.getRange("B8").setNumberFormat("0.0");
   sh.getRange("B9").setNumberFormat("0.0%");
   sh.setColumnWidth(1, 250);
   sh.setColumnWidths(2, 4, 95);
   sh.getRange("A3:E6").setBorder(true, true, true, true, true, true);
-  sh.getRange("A8:B10").setBorder(true, true, true, true, true, true);
+  sh.getRange("A8:B13").setBorder(true, true, true, true, true, true);
 
   var detailRows = [["AUDIT TRAIL — WHERE EACH NUMBER COMES FROM", "", "", "", ""]];
   for (var detailWeek = 0; detailWeek < 4; detailWeek++) {
@@ -1312,9 +1429,9 @@ function refreshAttendanceReport() {
   if (warnings.length > 0) {
     detailRows.push(["SETUP WARNINGS", "", warnings.join("\n"), "", ""]);
   }
-  sh.getRange(12, 1, detailRows.length, 5).setValues(detailRows);
-  sh.getRange("A12:E12").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
-  sh.getRange(13, 1, detailRows.length - 1, 3).setWrap(true).setVerticalAlignment("top");
+  sh.getRange(15, 1, detailRows.length, 5).setValues(detailRows);
+  sh.getRange("A15:E15").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  sh.getRange(16, 1, detailRows.length - 1, 3).setWrap(true).setVerticalAlignment("top");
   sh.setColumnWidth(2, 190);
   sh.setColumnWidth(3, 520);
   return sh;
@@ -1373,7 +1490,7 @@ function buildEntryPad_(ss) {
 
   // Header area
   sh.getRange("A1").setValue("Event:").setFontWeight("bold");
-  sh.getRange("B1:G1").merge();
+  sh.getRange("B1:H1").merge();
   sh.getRange("B1")
     .setBackground("#FFF3CC")
     .setDataValidation(
@@ -1385,15 +1502,16 @@ function buildEntryPad_(ss) {
     );
   sh.getRange("A2").setValue("Tick to SAVE →").setFontWeight("bold");
   sh.getRange("B2").insertCheckboxes().setBackground("#D7F2DC");
-  sh.getRange("C2:G2").merge();
-  sh.getRange("C2").setValue("Pick the event, tick attendees, then tick SAVE.").setFontStyle("italic");
-  sh.getRange("A3").setValue("EB rank = Early Bird order of arrival (1–10), regular meetings only. Credit blank = 1.")
+  sh.getRange("C2:H2").merge();
+  sh.getRange("C2").setValue("Pick the event, tick attendees, choose a mode, then SAVE.").setFontStyle("italic");
+  sh.getRange("A3").setValue("Attendance mode is required for checked members. EB rank 1–10. Credit blank = 1.")
     .setFontSize(9).setFontColor("#666666");
-  sh.getRange("A3:G3").merge();
+  sh.getRange("A3:H3").merge();
 
   // Table headers
-  sh.getRange("A4:G4").setValues([[
-    "Present", "Full name (Last, First)", "Nickname", "Member ID", "EB rank", "Credit", "Notes"
+  sh.getRange("A4:H4").setValues([[
+    "Present", "Full name (Last, First)", "Nickname", "Member ID",
+    "Attendance mode", "EB rank", "Credit", "Notes"
   ]])
     .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
   sh.setFrozenRows(4);
@@ -1433,6 +1551,12 @@ function buildEntryPad_(ss) {
 
   sh.getRange(PAD_FIRST_ROW, 5, n, 1).setDataValidation(
     SpreadsheetApp.newDataValidation()
+      .requireValueInList(ATTENDANCE_MODES, true)
+      .setAllowInvalid(false)
+      .build()
+  );
+  sh.getRange(PAD_FIRST_ROW, 6, n, 1).setDataValidation(
+    SpreadsheetApp.newDataValidation()
       .requireValueInList(["1","2","3","4","5","6","7","8","9","10"], true)
       .setAllowInvalid(false)
       .build()
@@ -1441,13 +1565,14 @@ function buildEntryPad_(ss) {
   sh.setColumnWidth(2, 180);
   sh.setColumnWidth(3, 130);
   sh.setColumnWidth(4, 90);
-  sh.setColumnWidth(5, 70);
-  sh.setColumnWidth(6, 60);
-  sh.setColumnWidth(7, 180);
+  sh.setColumnWidth(5, 125);
+  sh.setColumnWidth(6, 70);
+  sh.setColumnWidth(7, 60);
+  sh.setColumnWidth(8, 180);
   sh.getRange(PAD_FIRST_ROW, 2, n, 3).protect()
     .setDescription("Member fields come from the Members tab — sort, but don't type here.")
     .setWarningOnly(true);
-  sh.getRange(4, 1, n + 1, 7).createFilter();
+  sh.getRange(4, 1, n + 1, 8).createFilter();
 }
 
 function refreshEntryPadRoster() {
@@ -1523,6 +1648,7 @@ function setupWorkbook() {
   buildAttendance_(ss);
   buildEarlyBird_(ss);
   ensureMeetingsColumns_(ss);
+  ensureAttendanceModeColumn_(ss);
   ensureReportsTab_(ss);
   ensureAttendanceReportTab_(ss);
   buildLookup_(ss);
@@ -1610,12 +1736,14 @@ function buildMeetings_(ss) {
 function buildAttendance_(ss) {
   var sh = ss.insertSheet("Attendance");
   var rows = ATTENDANCE_.map(function (pair) {
-    return [pair[0], pair[1], "", "", "1", ""];
+    return [pair[0], pair[1], "", "", "", "1", ""];
   });
   writeTable_(sh,
-    ["meeting_id", "member_id", "member_name", "member_nickname", "credit_given", "notes"],
+    ["meeting_id", "member_id", "member_name", "member_nickname",
+     "attendance_mode", "credit_given", "notes"],
     rows);
   backfillMemberFields_(ss, sh, 2);
+  dropdownAllowBlank_(sh, 5, ATTENDANCE_MODES);
   sh.setColumnWidth(3, 180);
   sh.setColumnWidth(4, 140);
 }

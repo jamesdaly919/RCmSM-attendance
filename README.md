@@ -180,10 +180,12 @@ sortable EntryPad roster**. This is the fast way to record a whole meeting
 1. In the **yellow cell** at the top, pick the event. Type part of its title
    or date and Sheets suggests the match.
 2. **Tick "Present"** beside every member who attended.
-3. For **regular meetings**, type the **EB rank** (1–10) beside the first ten
+3. Choose **In-person** or **Online** for every checked member. EntryPad will
+   not save until every attendee has a mode.
+4. For **regular meetings**, type the **EB rank** (1–10) beside the first ten
    arrivals. Leave it blank for everyone else.
-4. Leave **Credit** blank (blank = 1) unless the event is worth more.
-5. Tick the green **SAVE** checkbox.
+5. Leave **Credit** blank (blank = 1) unless the event is worth more.
+6. Tick the green **SAVE** checkbox.
 
 The script copies everything into the Attendance and EarlyBird tabs, skips
 anything already recorded (so an accidental double-save is harmless), clears
@@ -198,6 +200,11 @@ The Attendance and EarlyBird tabs also keep connected **member_id**,
 **member_name**, and **member_nickname** columns together. Enter an
 unambiguous value in any one of those fields and the other two fill
 automatically; the ID remains authoritative.
+
+Attendance also has an **attendance_mode** dropdown with exactly two choices:
+**In-person** and **Online**. Existing rows remain blank after upgrading so
+they can be classified manually. Re-entering an existing member/event through
+EntryPad updates that row's mode without creating duplicate attendance.
 
 ### Fixing or adding single rows by hand
 
@@ -313,6 +320,10 @@ The frontend **Events** tab has List and Calendar modes. List mode expands each
 event to show attendees and absences. Calendar mode plots activities on their
 scheduled dates; selecting a past date shows its activity details, attendees,
 absences, and any recorded Early Birds.
+
+The frontend Report page and backend AttendanceReport tab also show monthly
+totals for In-person, Online, and Mode not recorded. These are unique active
+member-event attendance records, so duplicate rows do not inflate the totals.
 
 ## Part 5 — Odds and ends
 

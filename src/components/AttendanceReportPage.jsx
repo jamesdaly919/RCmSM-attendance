@@ -13,6 +13,15 @@ function hasCredit(row) {
   return (Number.parseFloat(row.credit_given) || 0) > 0;
 }
 
+function attendanceMode(value) {
+  const mode = String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (mode === "online") return "Online";
+  if (mode === "in-person" || mode === "in person" || mode === "inperson") {
+    return "In-person";
+  }
+  return "";
+}
+
 function nameSort(a, b) {
   return memberName(a).full.localeCompare(memberName(b).full);
 }
@@ -134,6 +143,21 @@ export function monthlyAttendanceReport(model, mk) {
   const percentage = eligibleMembers.length
     ? (average / eligibleMembers.length) * 100
     : 0;
+  const meetingIds = new Set(meetings.map((meeting) => meeting.meeting_id));
+  const countedModePairs = new Set();
+  const modeTotals = { inPerson: 0, online: 0, unrecorded: 0 };
+  model.attendance.forEach((row) => {
+    if (!row.member_id || !activeIds.has(row.member_id) || !meetingIds.has(row.meeting_id)) {
+      return;
+    }
+    const pair = `${row.meeting_id}|${row.member_id}`;
+    if (countedModePairs.has(pair)) return;
+    countedModePairs.add(pair);
+    const mode = attendanceMode(row.attendance_mode);
+    if (mode === "In-person") modeTotals.inPerson += 1;
+    else if (mode === "Online") modeTotals.online += 1;
+    else modeTotals.unrecorded += 1;
+  });
 
   return {
     weeks,
@@ -142,6 +166,7 @@ export function monthlyAttendanceReport(model, mk) {
     percentage,
     activeMembers: eligibleMembers.length,
     scheduledWeekCount: scheduledWeeks.length,
+    modeTotals,
   };
 }
 
@@ -249,6 +274,30 @@ export default function AttendanceReportPage({ model, mk, months, setMonth }) {
             <small>of {report.activeMembers} active members</small>
           </div>
         </div>
+
+        <section className="report-mode-summary">
+          <div>
+            <span className="eyebrow">Attendance format</span>
+            <h3>Online vs in-person</h3>
+            <p className="muted">
+              Totals count unique active member-event attendance records for this month.
+            </p>
+          </div>
+          <div className="report-mode-summary__grid">
+            <div className="report-mode-card report-mode-card--person">
+              <span>In-person</span>
+              <strong>{report.modeTotals.inPerson}</strong>
+            </div>
+            <div className="report-mode-card report-mode-card--online">
+              <span>Online</span>
+              <strong>{report.modeTotals.online}</strong>
+            </div>
+            <div className="report-mode-card report-mode-card--missing">
+              <span>Mode not recorded</span>
+              <strong>{report.modeTotals.unrecorded}</strong>
+            </div>
+          </div>
+        </section>
 
         <section className="report-evidence">
           <div className="report-evidence__head">

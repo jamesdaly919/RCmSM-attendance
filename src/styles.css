@@ -578,11 +578,93 @@ html, body { font-size: 17px; }
 .event-card--cancelled { opacity: 0.62; }
 .event-card--cancelled .event-card__top strong { text-decoration: line-through; }
 
+/* ---------- Events list / calendar modes ---------- */
+.events-head > div:first-child { display: grid; gap: 9px; }
+.view-switcher {
+  display: inline-flex; width: fit-content; padding: 3px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--mist);
+}
+.view-switcher__button {
+  padding: 7px 12px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--slate); font-size: 13px; font-weight: 750;
+}
+.view-switcher__button--on {
+  background: #fff; color: var(--azure); box-shadow: 0 1px 4px rgba(17, 38, 70, 0.12);
+}
+.event-card__notes {
+  margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid var(--gold);
+  border-radius: 0 8px 8px 0; background: #fff9e8; color: var(--slate); font-size: 13px;
+}
+.events-calendar {
+  overflow: hidden; margin-top: 18px; border: 1px solid var(--line);
+  border-radius: 14px; background: #fff;
+}
+.events-calendar__weekdays, .events-calendar__grid {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+.events-calendar__weekdays {
+  background: var(--azure); color: #fff; text-align: center;
+  font-size: 11px; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase;
+}
+.events-calendar__weekdays span { padding: 8px 3px; }
+.events-calendar__blank, .events-calendar__day {
+  min-width: 0; min-height: 104px; border: 0; border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line); background: #fff;
+}
+.events-calendar__day {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  padding: 8px; color: var(--ink); text-align: left;
+}
+.events-calendar__day:nth-child(7n), .events-calendar__blank:nth-child(7n) { border-right: 0; }
+.events-calendar__day:hover { background: #f6f9fe; }
+.events-calendar__day--past { background: #fafbfc; }
+.events-calendar__day--selected {
+  position: relative; z-index: 1; background: #edf4ff;
+  box-shadow: inset 0 0 0 3px var(--azure);
+}
+.events-calendar__number {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 25px; height: 25px; border-radius: 999px; font-size: 12px; font-weight: 800;
+}
+.events-calendar__day--today .events-calendar__number {
+  background: var(--gold); color: #3f2b00;
+}
+.events-calendar__items { display: grid; gap: 4px; min-width: 0; }
+.events-calendar__item {
+  overflow: hidden; padding: 4px 5px; border-radius: 5px;
+  background: #dfeafb; color: var(--azure); font-size: 10px; font-weight: 750;
+  line-height: 1.2; text-overflow: ellipsis; white-space: nowrap;
+}
+.events-calendar__item--cancelled {
+  background: #efe1de; color: #8c2f1b; text-decoration: line-through;
+}
+.events-calendar__items small { color: var(--slate); font-size: 9px; }
+.calendar-selection {
+  margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line);
+}
+.calendar-selection__head {
+  display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 12px;
+}
+.calendar-selection__head h3 { margin: 3px 0 0; }
+.calendar-selection__events { display: grid; gap: 12px; }
+
 @media (max-width: 600px) {
   .event-roster { grid-template-columns: 1fr; }
   .event-roster__names { max-height: 180px; }
   .tabbar__item { font-size: 12px; padding-inline: 2px; }
   .tabbar__icon { font-size: 20px; }
+  .events-head { align-items: end; }
+  .events-calendar__blank, .events-calendar__day { min-height: 62px; }
+  .events-calendar__day { gap: 3px; padding: 4px; }
+  .events-calendar__number { width: 21px; height: 21px; font-size: 11px; }
+  .events-calendar__items {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+  }
+  .events-calendar__item {
+    width: 7px; height: 7px; padding: 0; border-radius: 999px;
+    color: transparent; font-size: 0;
+  }
+  .events-calendar__items small { display: none; }
 }
 
 /* ---------- Rotary monthly attendance report ---------- */

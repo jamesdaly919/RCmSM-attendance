@@ -55,7 +55,8 @@ function onOpen() {
     .addItem("Save EntryPad now", "saveEntryPad")
     .addItem("Clear EntryPad (without saving)", "clearEntryPad")
     .addItem("Refresh sortable EntryPad roster", "refreshEntryPadRoster")
-    .addItem("Add/backfill connected member columns", "upgradeMemberNameColumns")
+    .addItem("Repair connected member fields", "repairConnectedMemberFields")
+    .addItem("Audit member ID continuity", "auditMemberIdContinuity")
     .addItem("Refresh monthly attendance report", "refreshAttendanceReport")
     .addItem("Upgrade sheet to latest version", "upgradeSheet")
     .addToUi();
@@ -471,12 +472,16 @@ function upgradeSheet() {
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
+  var repair = repairConnectedMemberFields_(ss);
+  var audit = auditMemberIdContinuity_(ss);
   ensureCapacity_(ss);
   refreshAttendanceReport();
   SpreadsheetApp.flush();
   ss.toast(
-    "Sheet upgrade complete. Use Rotary Tools > Add/backfill connected member columns " +
-      "to fill existing rows in the background." +
+    "Sheet upgrade complete. Filled " + repair.filled +
+      " connected member row(s); " + repair.unresolved + " unresolved. " +
+      "ID continuity: " + audit.preserved + " preserved, " +
+      audit.review + " to review." +
       (addedSettings.length > 0
         ? " Added Settings: " + addedSettings.join(", ") + "."
         : ""),
@@ -495,6 +500,13 @@ var MEMBER_NAME_BACKFILL_BATCH = 250;
 // first small batch runs now; one-shot triggers continue in the background.
 // No individual execution rewrites more than MEMBER_NAME_BACKFILL_BATCH rows.
 function upgradeMemberNameColumns() {
+  repairConnectedMemberFields();
+}
+
+// Repairs both tabs immediately. member_id is authoritative: existing IDs are
+// never renumbered from row order, and unresolved/ambiguous values are left
+// untouched for review instead of being guessed.
+function repairConnectedMemberFields() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   ["Members", "Attendance", "EarlyBird"].forEach(function (name) {
     if (!ss.getSheetByName(name)) {
@@ -503,18 +515,48 @@ function upgradeMemberNameColumns() {
   });
   ensureMemberColumns_(ss);
   buildLookup_(ss);
-  buildEntryPad_(ss);
   applySmartValidations_(ss);
   clearMemberNameBackfillTriggers_();
-  PropertiesService.getDocumentProperties().setProperty(
-    MEMBER_NAME_BACKFILL_KEY,
-    JSON.stringify({ sheetIndex: 0, nextRow: 2, updated: 0 })
-  );
-  continueMemberNameBackfill_();
+  PropertiesService.getDocumentProperties().deleteProperty(MEMBER_NAME_BACKFILL_KEY);
+  var result = repairConnectedMemberFields_(ss);
+  var audit = auditMemberIdContinuity_(ss);
+  refreshAttendanceReport();
   var message =
-    "Connected member columns and sortable EntryPad are ready. " +
-    "Existing rows are backfilling in the background.";
-  ss.toast(message, "Rotary Tools", 8);
+    "Connected fields repaired: " + result.filled + " row(s) filled, " +
+    result.alreadyCorrect + " already correct, " + result.unresolved +
+    " unresolved. ID audit: " + audit.preserved + " preserved, " +
+    audit.review + " to review.";
+  ss.toast(message, "Rotary Tools", 12);
+  return result;
+}
+
+function repairConnectedMemberFields_(ss) {
+  ensureMemberColumns_(ss);
+  var totals = { filled: 0, alreadyCorrect: 0, unresolved: 0 };
+  ["Attendance", "EarlyBird"].forEach(function (sheetName) {
+    var sh = ss.getSheetByName(sheetName);
+    var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+      .map(function (h) { return String(h).trim().toLowerCase(); });
+    var idCol = headers.indexOf("member_id") + 1;
+    var stats = backfillMemberFields_(ss, sh, idCol);
+    totals.filled += stats.filled;
+    totals.alreadyCorrect += stats.alreadyCorrect;
+    totals.unresolved += stats.unresolved;
+  });
+  SpreadsheetApp.flush();
+  return totals;
+}
+
+function auditMemberIdContinuity() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var result = auditMemberIdContinuity_(ss);
+  ss.toast(
+    "ID continuity audit complete: " + result.preserved + " preserved, " +
+      result.newIds + " new, " + result.review + " to review. See MemberIDContinuity.",
+    "Rotary Tools",
+    12
+  );
+  return result;
 }
 
 function continueMemberNameBackfill_() {
@@ -744,16 +786,34 @@ function memberForRef_(index, ref) {
 
 function backfillMemberFields_(ss, sh, idCol) {
   var lastRow = sh.getLastRow();
-  if (lastRow < 2) return;
+  var stats = { filled: 0, alreadyCorrect: 0, unresolved: 0 };
+  if (lastRow < 2) return stats;
   var index = buildMemberIndex_(ss);
-  var refs = sh.getRange(2, idCol, lastRow - 1, 1).getValues();
-  var fields = refs.map(function (row) {
-    var member = memberForRef_(index, row[0]);
-    return member
-      ? [member.id, member.name, member.nickname]
-      : [String(row[0] || "").trim(), "", ""];
+  var existing = sh.getRange(2, idCol, lastRow - 1, 3).getValues();
+  var fields = existing.map(function (row) {
+    var rawId = String(row[0] || "").trim();
+    var member = memberForRef_(index, rawId);
+    // Only fall back to name/nickname when the ID cell is blank. A nonblank,
+    // unknown ID is preserved for review rather than silently reassigned.
+    if (!member && !rawId) {
+      member = memberForRef_(index, row[1]) || memberForRef_(index, row[2]);
+    }
+    if (!member) {
+      if (rawId || row[1] || row[2]) stats.unresolved++;
+      return row;
+    }
+    var connected = [member.id, member.name, member.nickname];
+    if (String(row[0]) === connected[0] &&
+        String(row[1]) === connected[1] &&
+        String(row[2]) === connected[2]) {
+      stats.alreadyCorrect++;
+    } else {
+      stats.filled++;
+    }
+    return connected;
   });
   sh.getRange(2, idCol, fields.length, 3).setValues(fields);
+  return stats;
 }
 
 function syncMemberFieldsForEdit_(e) {
@@ -778,10 +838,19 @@ function syncMemberFieldsForEdit_(e) {
     if (editedStart <= idCol && editedEnd >= idCol) refs.push(row[0]);
     if (editedStart <= nameCol && editedEnd >= nameCol) refs.push(row[1]);
     if (editedStart <= nicknameCol && editedEnd >= nicknameCol) refs.push(row[2]);
-    var ref = refs.filter(function (value) {
+    var nonblankEdited = refs.filter(function (value) {
       return String(value || "").trim() !== "";
-    })[0];
-    if (ref === undefined) return row; // all three connected fields were cleared
+    });
+    var ref = nonblankEdited[0];
+    // Clearing just one connected cell should restore it from the other two.
+    // Clearing all three cells together intentionally removes the association.
+    if (ref === undefined) {
+      var remaining = row.filter(function (value) {
+        return String(value || "").trim() !== "";
+      });
+      if (remaining.length === 0) return row;
+      ref = remaining[0];
+    }
     var member = memberForRef_(index, ref);
     if (!member) {
       unresolved++;
@@ -797,6 +866,147 @@ function syncMemberFieldsForEdit_(e) {
       8
     );
   }
+}
+
+// Produces a read-only audit trail against the original 49-member Mutya
+// baseline embedded in this script. It never changes IDs or member records.
+function auditMemberIdContinuity_(ss) {
+  function clean(value) {
+    return String(value || "").trim().replace(/\s+/g, " ");
+  }
+  function identity(last, first, middle, nickname) {
+    var name = (clean(last) ? clean(last) + ", " : "") +
+      [clean(first), clean(middle)].filter(String).join(" ");
+    return name + (clean(nickname) ? " (" + clean(nickname) + ")" : "");
+  }
+  function comparisonKey(last, first) {
+    return (clean(last) + "|" + clean(first)).toUpperCase();
+  }
+  function referenceCounts(sheetName) {
+    var counts = {};
+    tableObjects_(ss.getSheetByName(sheetName)).forEach(function (row) {
+      var raw = clean(row.member_id);
+      var id = extractMemberId_(raw) || raw;
+      if (id) counts[id] = (counts[id] || 0) + 1;
+    });
+    return counts;
+  }
+
+  var baseline = {};
+  MEMBERS_.forEach(function (member) {
+    baseline[member[0]] = {
+      identity: identity(member[1], member[2], member[3], member[4]),
+      key: comparisonKey(member[1], member[2])
+    };
+  });
+
+  var currentById = {};
+  var blankIdRows = 0;
+  tableObjects_(ss.getSheetByName("Members")).forEach(function (member) {
+    var id = clean(member.member_id);
+    if (!id) {
+      blankIdRows++;
+      return;
+    }
+    if (!currentById[id]) currentById[id] = [];
+    currentById[id].push({
+      identity: identity(
+        member.last_name, member.first_name, member.middle_name, member.nickname
+      ),
+      key: comparisonKey(member.last_name, member.first_name)
+    });
+  });
+
+  var attendanceCounts = referenceCounts("Attendance");
+  var earlyBirdCounts = referenceCounts("EarlyBird");
+  var ids = Object.keys(baseline).concat(Object.keys(currentById))
+    .filter(function (id, index, all) { return all.indexOf(id) === index; })
+    .sort();
+  var rows = [];
+  var result = { preserved: 0, newIds: 0, review: 0 };
+
+  ids.forEach(function (id) {
+    var oldMember = baseline[id];
+    var current = currentById[id] || [];
+    var status;
+    var currentIdentity = current.map(function (member) {
+      return member.identity;
+    }).join(" | ");
+
+    if (current.length > 1) {
+      status = "DUPLICATE ID — REVIEW";
+      result.review++;
+    } else if (!oldMember) {
+      status = "NEW ID (after original baseline)";
+      result.newIds++;
+    } else if (current.length === 0) {
+      status = "ORIGINAL ID MISSING — REVIEW";
+      result.review++;
+    } else if (oldMember.key !== current[0].key) {
+      status = "ID PRESENT; MEMBER NAME CHANGED — REVIEW";
+      result.review++;
+    } else {
+      status = "PRESERVED";
+      result.preserved++;
+    }
+    rows.push([
+      id,
+      oldMember ? oldMember.identity : "",
+      currentIdentity,
+      status,
+      attendanceCounts[id] || 0,
+      earlyBirdCounts[id] || 0
+    ]);
+  });
+
+  Object.keys(attendanceCounts).concat(Object.keys(earlyBirdCounts))
+    .filter(function (id, index, all) {
+      return all.indexOf(id) === index && !currentById[id];
+    })
+    .sort()
+    .forEach(function (id) {
+      if (baseline[id]) return; // already represented as an original missing ID
+      rows.push([
+        id, "", "", "DATA ROW REFERENCES ID MISSING FROM MEMBERS — REVIEW",
+        attendanceCounts[id] || 0, earlyBirdCounts[id] || 0
+      ]);
+      result.review++;
+    });
+
+  if (blankIdRows > 0) {
+    rows.push([
+      "(blank)", "", "", blankIdRows + " Members row(s) have no ID — REVIEW", 0, 0
+    ]);
+    result.review += blankIdRows;
+  }
+
+  var sh = ss.getSheetByName("MemberIDContinuity") || ss.insertSheet("MemberIDContinuity");
+  if (sh.getFilter()) sh.getFilter().remove();
+  sh.clear();
+  writeTable_(sh, [
+    "member_id", "original_baseline_identity", "current_identity",
+    "continuity_status", "attendance_rows", "earlybird_rows"
+  ], rows);
+  sh.getRange(1, 1, 1, 6).setNote(
+    "Generated " + Utilities.formatDate(
+      new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd HH:mm"
+    ) + ". This audit never edits member IDs."
+  );
+  sh.setColumnWidth(1, 95);
+  sh.setColumnWidth(2, 260);
+  sh.setColumnWidth(3, 260);
+  sh.setColumnWidth(4, 310);
+  sh.setColumnWidths(5, 2, 110);
+  if (rows.length > 0) {
+    sh.getRange(1, 1, rows.length + 1, 6).createFilter();
+    var statuses = sh.getRange(2, 4, rows.length, 1).getValues();
+    statuses.forEach(function (row, index) {
+      var color = row[0] === "PRESERVED" ? "#E7F6EA" :
+        String(row[0]).indexOf("NEW ID") === 0 ? "#EAF1FB" : "#FFF2CC";
+      sh.getRange(index + 2, 4).setBackground(color);
+    });
+  }
+  return result;
 }
 
 function dropdownAllowBlank_(sheet, col, values) {
@@ -1318,6 +1528,7 @@ function setupWorkbook() {
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
+  auditMemberIdContinuity_(ss);
   refreshAttendanceReport();
 
   SpreadsheetApp.flush();

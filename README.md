@@ -278,10 +278,19 @@ Small maintenance point: if you later paste a **newer version of the script**,
 use **Deploy → Manage deployments → (pencil) → New version** so the existing
 URL keeps working — don't create a second deployment.
 
-For an existing workbook, paste the latest script, run **upgradeSheet**, then
-run **upgradeMemberNameColumns**. The first creates the AttendanceReport tab;
-the second adds the connected member columns and backfills existing rows in
-small background batches.
+For an existing workbook, paste the latest script and run **upgradeSheet**.
+It now adds and immediately fills the connected member columns in Attendance
+and EarlyBird—there is no separate background step. If any rows still need
+repair, use **Rotary Tools → Repair connected member fields**. The member ID is
+authoritative; an unknown nonblank ID is preserved for review and never
+silently reassigned from a name or row number.
+
+The upgrade also creates **MemberIDContinuity**, a read-only audit comparing
+the live Members tab with the original 49-member Mutya baseline. It shows each
+ID's original identity, current identity, Attendance/EarlyBird usage counts,
+and whether it was preserved, newly added, duplicated, missing, or changed.
+Run **Rotary Tools → Audit member ID continuity** whenever membership data is
+updated. Upgrades never renumber the existing Members tab.
 
 ## Part 4 — How the app calculates things
 
@@ -299,6 +308,11 @@ small background batches.
   and per Rotary year (July–June).
 - Only **Active** members count in club stats and leaderboards; Inactive
   members can still be looked up individually.
+
+The frontend **Events** tab has List and Calendar modes. List mode expands each
+event to show attendees and absences. Calendar mode plots activities on their
+scheduled dates; selecting a past date shows its activity details, attendees,
+absences, and any recorded Early Birds.
 
 ## Part 5 — Odds and ends
 

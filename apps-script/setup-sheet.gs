@@ -57,6 +57,7 @@ function onOpen() {
     .addItem("Refresh sortable EntryPad roster", "refreshEntryPadRoster")
     .addItem("Repair connected member fields", "repairConnectedMemberFields")
     .addItem("Audit member ID continuity", "auditMemberIdContinuity")
+    .addItem("Sort meetings and attendance now", "sortMeetingsAndAttendance")
     .addItem("Refresh monthly attendance report", "refreshAttendanceReport")
     .addItem("Upgrade sheet to latest version", "upgradeSheet")
     .addToUi();
@@ -116,6 +117,11 @@ function onEdit(e) {
     if (name === "Attendance" || name === "EarlyBird") {
       syncMemberFieldsForEdit_(e);
     }
+    if (name === "Attendance") {
+      enforceAttendanceModeForEdit_(e);
+      sortAttendanceByMeetingDate_(sh);
+      applyAttendanceModeRules_(e.source);
+    }
     if (name === "Attendance" || name === "Members") {
       refreshAttendanceReport();
     }
@@ -126,10 +132,15 @@ function onEdit(e) {
     }
     if (name === "Meetings") {
       autoMeetingIds_(sh, e.range);
+      sortMeetingsByDate_(sh);
       refreshAttendanceReport();
       return;
     }
     if (name !== "EntryPad") return;
+    if (e.range.getA1Notation() === "B1") {
+      updateEntryPadModeState_(e.source, sh);
+      return;
+    }
     if (e.range.getA1Notation() !== "B2") return;
     if (e.value !== "TRUE" && e.value !== true) return;
     saveEntryPad();
@@ -213,6 +224,46 @@ function suffixFromTitle_(title, type) {
   return pick.slice(0, 10);
 }
 
+function sortMeetingsAndAttendance() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  sortMeetingsByDate_(ss.getSheetByName("Meetings"));
+  sortAttendanceByMeetingDate_(ss.getSheetByName("Attendance"));
+  ss.toast("Meetings and Attendance sorted by meeting date.", "Rotary Tools", 5);
+}
+
+function sortMeetingsByDate_(sh) {
+  if (!sh || sh.getLastRow() < 3) return;
+  var width = sh.getLastColumn();
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues();
+  rows.sort(function (a, b) {
+    var ad = normDate_(a[1]) || "9999-99-99";
+    var bd = normDate_(b[1]) || "9999-99-99";
+    return ad.localeCompare(bd) || String(a[0] || "").localeCompare(String(b[0] || ""));
+  });
+  sh.getRange(2, 1, rows.length, width).setValues(rows);
+}
+
+function sortAttendanceByMeetingDate_(sh) {
+  if (!sh || sh.getLastRow() < 3) return;
+  var headers = sheetHeaders_(sh);
+  var meetingIdx = headers.indexOf("meeting_id");
+  var nickIdx = headers.indexOf("member_nickname");
+  var nameIdx = headers.indexOf("member_name");
+  var idIdx = headers.indexOf("member_id");
+  if (meetingIdx < 0) return;
+  var width = sh.getLastColumn();
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues();
+  rows.sort(function (a, b) {
+    var aid = extractMeetingId_(a[meetingIdx]) || String(a[meetingIdx] || "");
+    var bid = extractMeetingId_(b[meetingIdx]) || String(b[meetingIdx] || "");
+    return aid.localeCompare(bid) ||
+      String(a[nickIdx] || "").localeCompare(String(b[nickIdx] || "")) ||
+      String(a[nameIdx] || "").localeCompare(String(b[nameIdx] || "")) ||
+      String(a[idIdx] || "").localeCompare(String(b[idIdx] || ""));
+  });
+  sh.getRange(2, 1, rows.length, width).setValues(rows);
+}
+
 // ================================================================
 //  ENTRYPAD: SAVE
 // ================================================================
@@ -248,13 +299,13 @@ function saveEntryPad() {
   // 2. Read the pad rows.
   var n = PAD_LAST_ROW - PAD_FIRST_ROW + 1;
   var values = pad.getRange(PAD_FIRST_ROW, 1, n, 8).getValues();
-  // Present, Full name, Nickname, Member ID, Mode, EB, Credit, Notes
+  // Present, Nickname, Full name, Member ID, Mode, EB, Credit, Notes
 
   var missingModes = [];
   values.forEach(function (row) {
     if (row[0] !== true) return;
     var mode = normalizeAttendanceMode_(row[4]);
-    if (!mode) {
+    if (isRegular && !mode) {
       missingModes.push(String(row[1] || row[2] || row[3] || "Unknown member"));
     }
   });
@@ -273,6 +324,8 @@ function saveEntryPad() {
   // 3. What already exists (to skip duplicates)?
   ensureMemberColumns_(ss);
   ensureAttendanceModeColumn_(ss);
+  cleanNonRegularAttendanceModes_(ss);
+  applyAttendanceModeRules_(ss);
   var att = ss.getSheetByName("Attendance");
   var eb = ss.getSheetByName("EarlyBird");
   var memberIndex = buildMemberIndex_(ss);
@@ -286,7 +339,7 @@ function saveEntryPad() {
   for (var i = 0; i < values.length; i++) {
     var present = values[i][0] === true;
     var memberId = String(values[i][3] || "").trim();
-    var attendanceMode = normalizeAttendanceMode_(values[i][4]);
+    var attendanceMode = isRegular ? normalizeAttendanceMode_(values[i][4]) : "";
     var ebRank = String(values[i][5] || "").trim();
     var credit = String(values[i][6] || "").trim();
     var notes = String(values[i][7] || "").trim();
@@ -310,9 +363,9 @@ function saveEntryPad() {
     } else {
       attRows.push([
         meetingId,
-        memberId,
-        member.name,
         member.nickname,
+        member.name,
+        memberId,
         attendanceMode,
         credit === "" ? "1" : credit,
         notes
@@ -357,6 +410,8 @@ function saveEntryPad() {
 
   // 4b. Keep every tab comfortably ahead of its data.
   ensureCapacity_(ss);
+  sortAttendanceByMeetingDate_(att);
+  applyAttendanceModeRules_(ss);
   refreshAttendanceReport();
 
   // 5. Clear the pad + report.
@@ -446,6 +501,102 @@ function normalizeAttendanceMode_(value) {
   return "";
 }
 
+function updateEntryPadModeState_(ss, pad) {
+  if (!pad) return;
+  var label = String(pad.getRange("B1").getValue() || "");
+  var meetingId = extractMeetingId_(label);
+  var meeting = meetingId ? findMeeting_(ss, meetingId) : null;
+  var regular = meeting && String(meeting.type || "").toLowerCase() === "regular";
+  var range = pad.getRange(PAD_FIRST_ROW, 5, PAD_LAST_ROW - PAD_FIRST_ROW + 1, 1);
+  if (regular) {
+    range.setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build())
+      .setBackground("#FFF8E1").setNote("Required for regular meetings.");
+    pad.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Credit blank = 1.");
+  } else {
+    range.clearContent().clearDataValidations().setBackground("#EEEEEE")
+      .setNote("Not used for makeup or special meetings.");
+    pad.getRange("A3").setValue("Attendance mode is only recorded for regular meetings. EB rank is also regular-only. Credit blank = 1.");
+  }
+}
+
+function enforceAttendanceModeForEdit_(e) {
+  var sh = e.range.getSheet();
+  var headers = sheetHeaders_(sh);
+  var modeCol = headers.indexOf("attendance_mode") + 1;
+  var meetingCol = headers.indexOf("meeting_id") + 1;
+  var touchesMode = e.range.getColumn() <= modeCol && e.range.getLastColumn() >= modeCol;
+  var touchesMeeting = e.range.getColumn() <= meetingCol && e.range.getLastColumn() >= meetingCol;
+  if (!modeCol || !meetingCol || (!touchesMode && !touchesMeeting)) return;
+  var rule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build();
+  var first = Math.max(2, e.range.getRow());
+  var last = e.range.getLastRow();
+  for (var row = first; row <= last; row++) {
+    var meetingId = extractMeetingId_(sh.getRange(row, meetingCol).getValue()) ||
+      String(sh.getRange(row, meetingCol).getValue() || "").trim();
+    var meeting = findMeeting_(e.source, meetingId);
+    var cell = sh.getRange(row, modeCol);
+    if (!meeting || String(meeting.type || "").toLowerCase() !== "regular") {
+      cell.clearContent().clearDataValidations().setBackground("#EEEEEE")
+        .setNote("Attendance mode is only used for regular meetings.");
+    } else {
+      cell.setDataValidation(rule).setBackground("#FFF8E1")
+        .setNote("Choose In-person or Online for this regular meeting.");
+      var normalized = normalizeAttendanceMode_(cell.getValue());
+      if (normalized) cell.setValue(normalized);
+    }
+  }
+}
+
+function cleanNonRegularAttendanceModes_(ss) {
+  var sh = ss.getSheetByName("Attendance");
+  if (!sh || sh.getLastRow() < 2) return;
+  var headers = sheetHeaders_(sh);
+  var meetingCol = headers.indexOf("meeting_id") + 1;
+  var modeCol = headers.indexOf("attendance_mode") + 1;
+  if (!meetingCol || !modeCol) return;
+  var meetingValues = sh.getRange(2, meetingCol, sh.getLastRow() - 1, 1).getValues();
+  var modes = sh.getRange(2, modeCol, sh.getLastRow() - 1, 1).getValues();
+  var typeByMeeting = meetingTypeMap_(ss);
+  var changed = false;
+  modes.forEach(function (row, i) {
+    var id = extractMeetingId_(meetingValues[i][0]) || String(meetingValues[i][0] || "").trim();
+    if (typeByMeeting[id] !== "regular" && row[0] !== "") {
+      row[0] = "";
+      changed = true;
+    }
+  });
+  if (changed) sh.getRange(2, modeCol, modes.length, 1).setValues(modes);
+}
+
+function applyAttendanceModeRules_(ss) {
+  var sh = ss.getSheetByName("Attendance");
+  if (!sh) return;
+  var headers = sheetHeaders_(sh);
+  var meetingCol = headers.indexOf("meeting_id") + 1;
+  var modeCol = headers.indexOf("attendance_mode") + 1;
+  if (!meetingCol || !modeCol) return;
+  var count = Math.max(sh.getMaxRows() - 1, 1);
+  sh.getRange(2, modeCol, count, 1).clearDataValidations().setBackground("#EEEEEE")
+    .setNote("Attendance mode is only used for regular meetings.");
+  if (sh.getLastRow() < 2) return;
+  var ids = sh.getRange(2, meetingCol, sh.getLastRow() - 1, 1).getValues();
+  var typeByMeeting = meetingTypeMap_(ss);
+  var regularCells = [];
+  ids.forEach(function (row, index) {
+    var id = extractMeetingId_(row[0]) || String(row[0] || "").trim();
+    if (typeByMeeting[id] === "regular") {
+      regularCells.push(sh.getRange(index + 2, modeCol).getA1Notation());
+    }
+  });
+  if (regularCells.length) {
+    sh.getRangeList(regularCells).setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build())
+      .setBackground("#FFF8E1").setNote("Choose In-person or Online for this regular meeting.");
+  }
+}
+
 function existingAttendanceRows_(sheet) {
   var out = { pairs: {}, modeCol: 0 };
   var last = sheet.getLastRow();
@@ -504,6 +655,15 @@ function findMeeting_(ss, meetingId) {
   return null;
 }
 
+function meetingTypeMap_(ss) {
+  var out = {};
+  tableObjects_(ss.getSheetByName("Meetings")).forEach(function (meeting) {
+    var id = String(meeting.meeting_id || "").trim();
+    if (id) out[id] = String(meeting.meeting_type || "").trim().toLowerCase();
+  });
+  return out;
+}
+
 function existingPairs_(sheet, colA, colB) {
   var out = {};
   var last = sheet.getLastRow();
@@ -544,6 +704,7 @@ function upgradeSheet() {
   ensureMeetingsColumns_(ss);
   ensureMemberColumns_(ss);
   ensureAttendanceModeColumn_(ss);
+  cleanNonRegularAttendanceModes_(ss);
   ensureReportsTab_(ss);
   ensureAttendanceReportTab_(ss);
   var addedSettings = ensureSettings_(ss);
@@ -553,9 +714,13 @@ function upgradeSheet() {
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
+  applyAttendanceModeRules_(ss);
   var repair = repairConnectedMemberFields_(ss);
   var audit = auditMemberIdContinuity_(ss);
   ensureCapacity_(ss);
+  sortMeetingsByDate_(ss.getSheetByName("Meetings"));
+  sortAttendanceByMeetingDate_(ss.getSheetByName("Attendance"));
+  applyAttendanceModeRules_(ss);
   refreshAttendanceReport();
   SpreadsheetApp.flush();
   ss.toast(
@@ -597,6 +762,7 @@ function repairConnectedMemberFields() {
   ensureMemberColumns_(ss);
   buildLookup_(ss);
   applySmartValidations_(ss);
+  applyAttendanceModeRules_(ss);
   clearMemberNameBackfillTriggers_();
   PropertiesService.getDocumentProperties().deleteProperty(MEMBER_NAME_BACKFILL_KEY);
   var result = repairConnectedMemberFields_(ss);
@@ -765,48 +931,59 @@ function ensureMeetingsColumns_(ss) {
   return statusCol;
 }
 
-// Keeps three connected member fields together in each attendance data tab:
-// member_id, member_name (LAST, FIRST MIDDLE), member_nickname.
+function sheetHeaders_(sh) {
+  return sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (header) { return String(header).trim().toLowerCase(); });
+}
+
+function moveNamedColumn_(sh, header, targetColumn) {
+  var headers = sheetHeaders_(sh);
+  var current = headers.indexOf(header) + 1;
+  if (!current || current === targetColumn) return;
+  sh.moveColumns(sh.getRange(1, current, sh.getMaxRows(), 1), targetColumn);
+}
+
+// Attendance is encoder-first: nickname, full name, then authoritative ID.
+// EarlyBird retains ID/name/nickname because rank is its primary entry field.
 function ensureMemberColumns_(ss) {
   ["Attendance", "EarlyBird"].forEach(function (sheetName) {
     var sh = ss.getSheetByName(sheetName);
     if (!sh) return;
-    var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
-      .map(function (h) { return String(h).trim().toLowerCase(); });
+    var headers = sheetHeaders_(sh);
     var idCol = headers.indexOf("member_id") + 1;
     if (!idCol) return;
-    var changed = false;
 
     // Migrate the short-lived surname-only version in place.
     if (headers[idCol] === "member_last_name") {
       sh.getRange(1, idCol + 1).setValue("member_name");
-      headers[idCol] = "member_name";
-      changed = true;
     }
-    if (headers[idCol] !== "member_name") {
+    headers = sheetHeaders_(sh);
+    if (headers.indexOf("member_name") < 0) {
       sh.insertColumnAfter(idCol);
-      headers.splice(idCol, 0, "member_name");
-      changed = true;
+      sh.getRange(1, idCol + 1).setValue("member_name");
     }
-    if (headers[idCol + 1] !== "member_nickname") {
-      sh.insertColumnAfter(idCol + 1);
-      changed = true;
+    headers = sheetHeaders_(sh);
+    if (headers.indexOf("member_nickname") < 0) {
+      var nameCol = headers.indexOf("member_name") + 1;
+      sh.insertColumnAfter(nameCol);
+      sh.getRange(1, nameCol + 1).setValue("member_nickname");
     }
 
-    sh.getRange(1, idCol + 1, 1, 2)
-      .setValues([["member_name", "member_nickname"]])
-      .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
-    // Inserted columns can inherit the member-ID dropdown, which causes
-    // "input must fall within specified range" on valid names.
-    if (changed) {
-      var validationRows = Math.min(
-        sh.getMaxRows() - 1,
-        Math.max(sh.getLastRow() - 1 + CAPACITY_CUSHION, CAPACITY_CUSHION)
-      );
-      sh.getRange(2, idCol + 1, validationRows, 2).clearDataValidations();
+    if (sheetName === "Attendance") {
+      moveNamedColumn_(sh, "member_nickname", 2);
+      moveNamedColumn_(sh, "member_name", 3);
+      moveNamedColumn_(sh, "member_id", 4);
     }
-    sh.setColumnWidth(idCol + 1, 180);
-    sh.setColumnWidth(idCol + 2, 140);
+
+    headers = sheetHeaders_(sh);
+    ["member_nickname", "member_name", "member_id"].forEach(function (header) {
+      var col = headers.indexOf(header) + 1;
+      sh.getRange(1, col).setValue(header)
+        .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+    });
+    sh.setColumnWidth(headers.indexOf("member_nickname") + 1, 140);
+    sh.setColumnWidth(headers.indexOf("member_name") + 1, 190);
+    sh.setColumnWidth(headers.indexOf("member_id") + 1, 90);
   });
 }
 
@@ -815,15 +992,17 @@ function ensureAttendanceModeColumn_(ss) {
   if (!sh) return 0;
   var headers = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
     .map(function (header) { return String(header).trim().toLowerCase(); });
-  var nicknameCol = headers.indexOf("member_nickname") + 1;
   var modeCol = headers.indexOf("attendance_mode") + 1;
   if (!modeCol) {
-    if (!nicknameCol) throw new Error("Attendance member_nickname column is missing.");
-    sh.insertColumnAfter(nicknameCol);
-    modeCol = nicknameCol + 1;
+    var idCol = headers.indexOf("member_id") + 1;
+    if (!idCol) throw new Error("Attendance member_id column is missing.");
+    sh.insertColumnAfter(idCol);
+    modeCol = idCol + 1;
     sh.getRange(1, modeCol).setValue("attendance_mode")
       .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
   }
+  moveNamedColumn_(sh, "attendance_mode", 5);
+  modeCol = sheetHeaders_(sh).indexOf("attendance_mode") + 1;
   dropdownAllowBlank_(sh, modeCol, ATTENDANCE_MODES);
   sh.setColumnWidth(modeCol, 125);
   return modeCol;
@@ -888,9 +1067,16 @@ function backfillMemberFields_(ss, sh, idCol) {
   var lastRow = sh.getLastRow();
   var stats = { filled: 0, alreadyCorrect: 0, unresolved: 0 };
   if (lastRow < 2) return stats;
+  var headers = sheetHeaders_(sh);
+  idCol = headers.indexOf("member_id") + 1;
+  var nameCol = headers.indexOf("member_name") + 1;
+  var nicknameCol = headers.indexOf("member_nickname") + 1;
   var index = buildMemberIndex_(ss);
-  var existing = sh.getRange(2, idCol, lastRow - 1, 3).getValues();
-  var fields = existing.map(function (row) {
+  var ids = sh.getRange(2, idCol, lastRow - 1, 1).getValues();
+  var names = sh.getRange(2, nameCol, lastRow - 1, 1).getValues();
+  var nicknames = sh.getRange(2, nicknameCol, lastRow - 1, 1).getValues();
+  var connected = ids.map(function (idRow, indexRow) {
+    var row = [idRow[0], names[indexRow][0], nicknames[indexRow][0]];
     var rawId = String(row[0] || "").trim();
     var member = memberForRef_(index, rawId);
     // Only fall back to name/nickname when the ID cell is blank. A nonblank,
@@ -902,17 +1088,19 @@ function backfillMemberFields_(ss, sh, idCol) {
       if (rawId || row[1] || row[2]) stats.unresolved++;
       return row;
     }
-    var connected = [member.id, member.name, member.nickname];
-    if (String(row[0]) === connected[0] &&
-        String(row[1]) === connected[1] &&
-        String(row[2]) === connected[2]) {
+    var fields = [member.id, member.name, member.nickname];
+    if (String(row[0]) === fields[0] &&
+        String(row[1]) === fields[1] &&
+        String(row[2]) === fields[2]) {
       stats.alreadyCorrect++;
     } else {
       stats.filled++;
     }
-    return connected;
+    return fields;
   });
-  sh.getRange(2, idCol, fields.length, 3).setValues(fields);
+  sh.getRange(2, idCol, connected.length, 1).setValues(connected.map(function (row) { return [row[0]]; }));
+  sh.getRange(2, nameCol, connected.length, 1).setValues(connected.map(function (row) { return [row[1]]; }));
+  sh.getRange(2, nicknameCol, connected.length, 1).setValues(connected.map(function (row) { return [row[2]]; }));
   return stats;
 }
 
@@ -923,13 +1111,22 @@ function syncMemberFieldsForEdit_(e) {
   var idCol = headers.indexOf("member_id") + 1;
   var nameCol = headers.indexOf("member_name") + 1;
   var nicknameCol = headers.indexOf("member_nickname") + 1;
-  if (!idCol || nameCol !== idCol + 1 || nicknameCol !== idCol + 2) return;
-  if (e.range.getColumn() > nicknameCol || e.range.getLastColumn() < idCol) return;
+  if (!idCol || !nameCol || !nicknameCol) return;
+  var editedColumns = [idCol, nameCol, nicknameCol].filter(function (col) {
+    return e.range.getColumn() <= col && e.range.getLastColumn() >= col;
+  });
+  if (editedColumns.length === 0) return;
   var firstRow = Math.max(2, e.range.getRow());
   var lastRow = e.range.getLastRow();
   if (lastRow < firstRow) return;
   var index = buildMemberIndex_(e.source);
-  var rows = sh.getRange(firstRow, idCol, lastRow - firstRow + 1, 3).getValues();
+  var count = lastRow - firstRow + 1;
+  var ids = sh.getRange(firstRow, idCol, count, 1).getValues();
+  var names = sh.getRange(firstRow, nameCol, count, 1).getValues();
+  var nicknames = sh.getRange(firstRow, nicknameCol, count, 1).getValues();
+  var rows = ids.map(function (row, indexRow) {
+    return [row[0], names[indexRow][0], nicknames[indexRow][0]];
+  });
   var editedStart = e.range.getColumn();
   var editedEnd = e.range.getLastColumn();
   var unresolved = 0;
@@ -958,7 +1155,12 @@ function syncMemberFieldsForEdit_(e) {
     }
     return [member.id, member.name, member.nickname];
   });
-  sh.getRange(firstRow, idCol, connected.length, 3).setValues(connected);
+  sh.getRange(firstRow, idCol, connected.length, 1)
+    .setValues(connected.map(function (row) { return [row[0]]; }));
+  sh.getRange(firstRow, nameCol, connected.length, 1)
+    .setValues(connected.map(function (row) { return [row[1]]; }));
+  sh.getRange(firstRow, nicknameCol, connected.length, 1)
+    .setValues(connected.map(function (row) { return [row[2]]; }));
   if (unresolved > 0) {
     e.source.toast(
       unresolved + " member value(s) were ambiguous or not found. Enter the Member ID.",
@@ -1209,22 +1411,28 @@ function refreshAttendanceReport() {
   }
 
   var eligible = {};
+  var memberNames = {};
   tableObjects_(ss.getSheetByName("Members")).forEach(function (member) {
     var status = String(member.active_status || "Active").trim().toLowerCase();
     var id = String(member.member_id || "").trim();
-    if (id && status === "active") eligible[id] = true;
+    if (id && status === "active") {
+      eligible[id] = true;
+      memberNames[id] = String(member.nickname || "").trim() ||
+        ([member.last_name, member.first_name].filter(String).join(", ")) || id;
+    }
   });
 
   function assignedWeek_(meeting) {
     var value = parseInt(String(meeting.report_week || "").trim(), 10);
     return value >= 1 && value <= 4 ? value - 1 : -1;
   }
-  function dayNumber_(date) {
-    return Math.floor(new Date(date + "T00:00:00Z").getTime() / 86400000);
-  }
   function meetingLabel_(meeting) {
     return String(meeting.activity_title || "Untitled") + " (" +
       normDate_(meeting.date) + "; " + String(meeting.meeting_id || "") + ")";
+  }
+  function nameList_(ids) {
+    var names = ids.map(function (id) { return memberNames[id] || id; }).sort();
+    return names.length ? names.map(function (name) { return "• " + name; }).join("\n") : "None";
   }
 
   var allMeetings = tableObjects_(ss.getSheetByName("Meetings")).filter(function (meeting) {
@@ -1242,14 +1450,8 @@ function refreshAttendanceReport() {
     return String(meeting.meeting_type || "").trim().toLowerCase() !== "regular";
   });
   var regularMeetings = [[], [], [], []];
-  var makeupMeetings = [[], [], [], []];
-  var inferredMakeups = [{}, {}, {}, {}];
   var usedWeeks = {};
   var warnings = [];
-  var monthMeetingIds = {};
-  allMeetings.forEach(function (meeting) {
-    monthMeetingIds[String(meeting.meeting_id || "").trim()] = true;
-  });
 
   regular.filter(function (meeting) {
     return assignedWeek_(meeting) >= 0;
@@ -1273,59 +1475,30 @@ function refreshAttendanceReport() {
     usedWeeks[week] = true;
   });
 
-  other.forEach(function (meeting) {
-    var week = assignedWeek_(meeting);
-    var inferred = false;
-    if (week < 0) {
-      var closest = null;
-      for (var candidate = 0; candidate < 4; candidate++) {
-        regularMeetings[candidate].forEach(function (regularMeeting) {
-          var distance = Math.abs(
-            dayNumber_(normDate_(meeting.date)) - dayNumber_(normDate_(regularMeeting.date))
-          );
-          if (!closest || distance < closest.distance ||
-              (distance === closest.distance && candidate < closest.week)) {
-            closest = { week: candidate, distance: distance };
-          }
-        });
-      }
-      if (!closest) {
-        warnings.push(meetingLabel_(meeting) + " has no regular meeting to attach to.");
-        return;
-      }
-      week = closest.week;
-      inferred = true;
-    }
-    if (regularMeetings[week].length === 0) {
-      warnings.push(meetingLabel_(meeting) + " is assigned to Week " + (week + 1) +
-        ", which has no regular meeting.");
-      return;
-    }
-    makeupMeetings[week].push(meeting);
-    if (inferred) inferredMakeups[week][String(meeting.meeting_id || "")] = true;
-  });
-
   var regularByWeek = [{}, {}, {}, {}];
-  var makeupByWeek = [{}, {}, {}, {}];
+  var regularMeetingIds = {};
+  var makeupMeetingIds = {};
   for (var assignmentWeek = 0; assignmentWeek < 4; assignmentWeek++) {
     regularMeetings[assignmentWeek].forEach(function (meeting) {
-      regularByWeek[assignmentWeek][String(meeting.meeting_id || "").trim()] = true;
-    });
-    makeupMeetings[assignmentWeek].forEach(function (meeting) {
-      makeupByWeek[assignmentWeek][String(meeting.meeting_id || "").trim()] = true;
+      var id = String(meeting.meeting_id || "").trim();
+      regularByWeek[assignmentWeek][id] = true;
+      regularMeetingIds[id] = true;
     });
   }
+  other.forEach(function (meeting) {
+    makeupMeetingIds[String(meeting.meeting_id || "").trim()] = meeting;
+  });
 
   var present = [{}, {}, {}, {}];
-  var makeup = [{}, {}, {}, {}];
+  var onSite = [{}, {}, {}, {}];
+  var online = [{}, {}, {}, {}];
+  var modeMissing = [{}, {}, {}, {}];
+  var regularByMember = {};
+  var makeupByMember = {};
+  var makeupAttendees = {};
   var modeTotals = { inPerson: 0, online: 0, unrecorded: 0 };
-  var countedModePairs = {};
   var memberIndex = buildMemberIndex_(ss);
-  var memberNames = {};
-  Object.keys(memberIndex).forEach(function (key) {
-    var member = memberIndex[key];
-    if (member && member.id) memberNames[member.id] = member.name || member.nickname || member.id;
-  });
+  var seenPairs = {};
   tableObjects_(ss.getSheetByName("Attendance")).forEach(function (row) {
     var member = memberForRef_(memberIndex, row.member_id);
     if (!member || !eligible[member.id]) return;
@@ -1333,17 +1506,24 @@ function refreshAttendanceReport() {
     var meetingId = extractMeetingId_(rawMeeting) || rawMeeting;
     var creditText = String(row.credit_given == null ? "" : row.credit_given).trim();
     var hasCredit = creditText === "" || (parseFloat(creditText) || 0) > 0;
-    var modePair = meetingId + "|" + member.id;
-    if (monthMeetingIds[meetingId] && !countedModePairs[modePair]) {
-      countedModePairs[modePair] = true;
-      var mode = normalizeAttendanceMode_(row.attendance_mode);
-      if (mode === "In-person") modeTotals.inPerson++;
-      else if (mode === "Online") modeTotals.online++;
-      else modeTotals.unrecorded++;
-    }
+    var pair = meetingId + "|" + member.id;
+    if (seenPairs[pair]) return;
+    seenPairs[pair] = true;
     for (var week = 0; week < 4; week++) {
-      if (regularByWeek[week][meetingId]) present[week][member.id] = true;
-      if (hasCredit && makeupByWeek[week][meetingId]) makeup[week][member.id] = true;
+      if (!regularByWeek[week][meetingId]) continue;
+      present[week][member.id] = true;
+      if (!regularByMember[member.id]) regularByMember[member.id] = {};
+      regularByMember[member.id][meetingId] = true;
+      var mode = normalizeAttendanceMode_(row.attendance_mode);
+      if (mode === "In-person") { onSite[week][member.id] = true; modeTotals.inPerson++; }
+      else if (mode === "Online") { online[week][member.id] = true; modeTotals.online++; }
+      else { modeMissing[week][member.id] = true; modeTotals.unrecorded++; }
+    }
+    if (hasCredit && makeupMeetingIds[meetingId]) {
+      if (!makeupByMember[member.id]) makeupByMember[member.id] = [];
+      makeupByMember[member.id].push(meetingId);
+      if (!makeupAttendees[meetingId]) makeupAttendees[meetingId] = {};
+      makeupAttendees[meetingId][member.id] = true;
     }
   });
 
@@ -1355,85 +1535,125 @@ function refreshAttendanceReport() {
       }).join(" / ");
       return "Week " + (week + 1) + " — " + dates;
     })),
-    ["Members Present"],
-    ["Members with Valid Make-Up"],
-    ["Total Attendance"],
+    ["Members on-site"],
+    ["Members online"],
+    ["Mode not recorded"],
+    ["Members present"],
+    ["Members absent"],
   ];
-  var total = 0;
+  var totalPresent = 0;
   var scheduledWeekCount = 0;
   for (var i = 0; i < 4; i++) {
     if (regularMeetings[i].length === 0) {
-      rows[1].push("—");
-      rows[2].push("—");
-      rows[3].push("—");
+      for (var emptyRow = 1; emptyRow < rows.length; emptyRow++) rows[emptyRow].push("—");
       continue;
     }
     scheduledWeekCount++;
     var presentCount = Object.keys(present[i]).length;
-    var makeupCount = Object.keys(makeup[i]).filter(function (id) {
+    var absentIds = Object.keys(eligible).filter(function (id) {
       return !present[i][id];
     }).length;
-    rows[1].push(presentCount);
-    rows[2].push(makeupCount);
-    rows[3].push(presentCount + makeupCount);
-    total += presentCount + makeupCount;
+    rows[1].push(Object.keys(onSite[i]).length);
+    rows[2].push(Object.keys(online[i]).length);
+    rows[3].push(Object.keys(modeMissing[i]).length);
+    rows[4].push(presentCount);
+    rows[5].push(absentIds);
+    totalPresent += presentCount;
   }
-  var average = scheduledWeekCount ? total / scheduledWeekCount : 0;
+  var average = scheduledWeekCount ? totalPresent / scheduledWeekCount : 0;
   var activeCount = Object.keys(eligible).length;
   var rate = activeCount ? average / activeCount : 0;
+  var required = Math.min(4, regular.length);
+  var makeupUsed = {};
+  var goalRows = [["MEMBER MONTHLY GOAL", "Regular", "Makeup used", "Result", "Makeup meeting(s) used"]];
+  Object.keys(eligible).sort(function (a, b) {
+    return (memberNames[a] || a).localeCompare(memberNames[b] || b);
+  }).forEach(function (id) {
+    var regularCount = Math.min(required, Object.keys(regularByMember[id] || {}).length);
+    var needed = Math.max(0, required - regularCount);
+    var available = (makeupByMember[id] || []).sort(function (a, b) {
+      return normDate_(makeupMeetingIds[a].date).localeCompare(normDate_(makeupMeetingIds[b].date));
+    });
+    var used = available.slice(0, needed);
+    used.forEach(function (meetingId) {
+      if (!makeupUsed[meetingId]) makeupUsed[meetingId] = {};
+      makeupUsed[meetingId][id] = true;
+    });
+    goalRows.push([
+      memberNames[id] || id,
+      regularCount,
+      used.length,
+      Math.min(required, regularCount + used.length) + "/" + required,
+      used.map(function (meetingId) { return meetingLabel_(makeupMeetingIds[meetingId]); }).join("\n") || "—"
+    ]);
+  });
 
-  sh.getRange("A3:E40").clearContent().clearFormat();
+  sh.getRange("A3:E500").clearContent().clearFormat();
   sh.getRange(3, 1, rows.length, 5).setValues(rows);
   sh.getRange("A3:E3").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
-  sh.getRange("A4:A6").setFontWeight("bold");
-  sh.getRange("A6:E6").setFontWeight("bold").setBackground("#EAF1FB");
-  sh.getRange("A8:B13").setValues([
+  sh.getRange(4, 1, rows.length - 1, 1).setFontWeight("bold");
+  sh.getRange(7, 1, 2, 5).setBackground("#EAF1FB");
+  var summaryStart = rows.length + 5;
+  sh.getRange(summaryStart, 1, 6, 2).setValues([
     ["Average Attendance for the Month", average],
     ["Average Attendance Rate", rate],
     ["Scheduled reporting weeks", scheduledWeekCount],
-    ["In-person attendance records", modeTotals.inPerson],
-    ["Online attendance records", modeTotals.online],
-    ["Attendance mode not recorded", modeTotals.unrecorded],
+    ["Regular on-site records", modeTotals.inPerson],
+    ["Regular online records", modeTotals.online],
+    ["Regular mode not recorded", modeTotals.unrecorded],
   ]);
-  sh.getRange("A8:A13").setFontWeight("bold");
-  sh.getRange("B8").setNumberFormat("0.0");
-  sh.getRange("B9").setNumberFormat("0.0%");
+  sh.getRange(summaryStart, 1, 6, 1).setFontWeight("bold");
+  sh.getRange(summaryStart, 2).setNumberFormat("0.0");
+  sh.getRange(summaryStart + 1, 2).setNumberFormat("0.0%");
   sh.setColumnWidth(1, 250);
-  sh.setColumnWidths(2, 4, 95);
-  sh.getRange("A3:E6").setBorder(true, true, true, true, true, true);
-  sh.getRange("A8:B13").setBorder(true, true, true, true, true, true);
+  sh.setColumnWidths(2, 4, 150);
+  sh.getRange(3, 1, rows.length, 5).setBorder(true, true, true, true, true, true);
+  sh.getRange(summaryStart, 1, 6, 2).setBorder(true, true, true, true, true, true);
 
-  var detailRows = [["AUDIT TRAIL — WHERE EACH NUMBER COMES FROM", "", "", "", ""]];
+  var detailRows = [["REGULAR MEETING AUDIT — WHERE EACH WEEKLY NUMBER COMES FROM", "", "", "", ""]];
   for (var detailWeek = 0; detailWeek < 4; detailWeek++) {
     var regularLabels = regularMeetings[detailWeek].map(meetingLabel_).join("\n") || "Not scheduled";
-    var presentNames = Object.keys(present[detailWeek]).map(function (id) {
-      return memberNames[id] || id;
-    }).sort().join(", ") || "None recorded";
-    var makeupLabels = makeupMeetings[detailWeek].map(function (meeting) {
-      var id = String(meeting.meeting_id || "");
-      return meetingLabel_(meeting) + (inferredMakeups[detailWeek][id] ? " [week inferred]" : "");
-    }).join("\n") || "None";
-    var validMakeupNames = Object.keys(makeup[detailWeek]).filter(function (id) {
-      return !present[detailWeek][id];
-    }).map(function (id) {
-      return memberNames[id] || id;
-    }).sort().join(", ") || "None recorded";
     detailRows.push(["Week " + (detailWeek + 1), "Regular meeting(s)", regularLabels, "", ""]);
-    detailRows.push(["", "Present (" + Object.keys(present[detailWeek]).length + ")", presentNames, "", ""]);
-    detailRows.push(["", "Make-up activities", makeupLabels, "", ""]);
-    detailRows.push(["", "Valid make-up members (" +
-      Object.keys(makeup[detailWeek]).filter(function (id) {
-        return !present[detailWeek][id];
-      }).length + ")", validMakeupNames, "", ""]);
+    detailRows.push(["", "On-site (" + Object.keys(onSite[detailWeek]).length + ")", nameList_(Object.keys(onSite[detailWeek])), "", ""]);
+    detailRows.push(["", "Online (" + Object.keys(online[detailWeek]).length + ")", nameList_(Object.keys(online[detailWeek])), "", ""]);
+    detailRows.push(["", "Absent (" + (activeCount - Object.keys(present[detailWeek]).length) + ")",
+      nameList_(Object.keys(eligible).filter(function (id) { return !present[detailWeek][id]; })), "", ""]);
   }
   if (warnings.length > 0) {
     detailRows.push(["SETUP WARNINGS", "", warnings.join("\n"), "", ""]);
   }
-  sh.getRange(15, 1, detailRows.length, 5).setValues(detailRows);
-  sh.getRange("A15:E15").setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
-  sh.getRange(16, 1, detailRows.length - 1, 3).setWrap(true).setVerticalAlignment("top");
+  var detailStart = summaryStart + 8;
+  sh.getRange(detailStart, 1, detailRows.length, 5).setValues(detailRows);
+  sh.getRange(detailStart, 1, 1, 5).setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  sh.getRange(detailStart + 1, 1, detailRows.length - 1, 3).setWrap(true).setVerticalAlignment("top");
+
+  var goalStart = detailStart + detailRows.length + 2;
+  sh.getRange(goalStart, 1, goalRows.length, 5).setValues(goalRows);
+  sh.getRange(goalStart, 1, 1, 5).setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
+  sh.getRange(goalStart + 1, 1, goalRows.length - 1, 5).setWrap(true).setVerticalAlignment("top");
+  sh.getRange(goalStart, 1, goalRows.length, 5).setBorder(true, true, true, true, true, true);
+
+  var makeupRows = [["MAKEUP MEETING TRANSPARENCY", "Meeting / date", "Attended", "Did not attend", "Counts as monthly makeup"]];
+  other.forEach(function (meeting) {
+    var meetingId = String(meeting.meeting_id || "").trim();
+    var attendees = Object.keys(makeupAttendees[meetingId] || {});
+    var absentees = Object.keys(eligible).filter(function (id) { return !makeupAttendees[meetingId] || !makeupAttendees[meetingId][id]; });
+    var counting = Object.keys(makeupUsed[meetingId] || {}).map(function (id) {
+      return "• " + (memberNames[id] || id) + " — counts toward monthly goal";
+    }).join("\n") || "None (attendees already met the goal or no credited attendance)";
+    var calendarWeek = Math.min(4, Math.floor((parseInt(normDate_(meeting.date).slice(8, 10), 10) - 1) / 7) + 1);
+    makeupRows.push(["Calendar Week " + calendarWeek, meetingLabel_(meeting), nameList_(attendees), nameList_(absentees), counting]);
+  });
+  if (other.length === 0) makeupRows.push(["—", "No makeup/special meetings scheduled", "—", "—", "—"]);
+  var makeupStart = goalStart + goalRows.length + 2;
+  sh.getRange(makeupStart, 1, makeupRows.length, 5).setValues(makeupRows);
+  sh.getRange(makeupStart, 1, 1, 5).setFontWeight("bold").setBackground("#D9A514").setFontColor("#1E2A3A");
+  sh.getRange(makeupStart + 1, 1, makeupRows.length - 1, 5).setWrap(true).setVerticalAlignment("top");
+  sh.getRange(makeupStart, 1, makeupRows.length, 5).setBorder(true, true, true, true, true, true);
   sh.setColumnWidth(2, 190);
-  sh.setColumnWidth(3, 520);
+  sh.setColumnWidth(3, 280);
+  sh.setColumnWidth(4, 280);
+  sh.setColumnWidth(5, 340);
   return sh;
 }
 
@@ -1503,14 +1723,14 @@ function buildEntryPad_(ss) {
   sh.getRange("A2").setValue("Tick to SAVE →").setFontWeight("bold");
   sh.getRange("B2").insertCheckboxes().setBackground("#D7F2DC");
   sh.getRange("C2:H2").merge();
-  sh.getRange("C2").setValue("Pick the event, tick attendees, choose a mode, then SAVE.").setFontStyle("italic");
-  sh.getRange("A3").setValue("Attendance mode is required for checked members. EB rank 1–10. Credit blank = 1.")
+  sh.getRange("C2").setValue("Pick the event, tick attendees, then SAVE.").setFontStyle("italic");
+  sh.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Credit blank = 1.")
     .setFontSize(9).setFontColor("#666666");
   sh.getRange("A3:H3").merge();
 
   // Table headers
   sh.getRange("A4:H4").setValues([[
-    "Present", "Full name (Last, First)", "Nickname", "Member ID",
+    "Present", "Nickname", "Full name (Last, First)", "Member ID",
     "Attendance mode", "EB rank", "Credit", "Notes"
   ]])
     .setFontWeight("bold").setBackground("#17458F").setFontColor("#FFFFFF");
@@ -1531,11 +1751,11 @@ function buildEntryPad_(ss) {
     2, 1, Math.max(members.getLastRow() - 1, 1), members.getLastColumn()
   ).getValues().map(function (row) {
     return [
+      String(row[nickIdx] || "").trim(),
       String(row[lastIdx] || "").trim() + ", " +
         [row[firstIdx], row[middleIdx]].map(function (value) {
           return String(value || "").trim();
         }).filter(String).join(" "),
-      String(row[nickIdx] || "").trim(),
       String(row[idIdx] || "").trim()
     ];
   }).filter(function (row) {
@@ -1562,8 +1782,8 @@ function buildEntryPad_(ss) {
       .build()
   );
   sh.setColumnWidth(1, 64);
-  sh.setColumnWidth(2, 180);
-  sh.setColumnWidth(3, 130);
+  sh.setColumnWidth(2, 140);
+  sh.setColumnWidth(3, 190);
   sh.setColumnWidth(4, 90);
   sh.setColumnWidth(5, 125);
   sh.setColumnWidth(6, 70);
@@ -1573,6 +1793,7 @@ function buildEntryPad_(ss) {
     .setDescription("Member fields come from the Members tab — sort, but don't type here.")
     .setWarningOnly(true);
   sh.getRange(4, 1, n + 1, 8).createFilter();
+  updateEntryPadModeState_(ss, sh);
 }
 
 function refreshEntryPadRoster() {
@@ -1580,7 +1801,7 @@ function refreshEntryPadRoster() {
   buildLookup_(ss);
   buildEntryPad_(ss);
   ss.toast(
-    "EntryPad roster refreshed. Sort by full name (last first), nickname, or ID.",
+    "EntryPad roster refreshed. Nickname is first for faster encoding.",
     "Rotary Tools",
     8
   );
@@ -1597,14 +1818,24 @@ function applySmartValidations_(ss) {
   var nicknameSource = ss.getRange("Lookup!E2:E");
   var meetingSource = ss.getRange("Lookup!F2:G");
 
-  smartDrop_(att, 1, meetingSource, "Type the meeting title, date, or ID.");
-  smartDrop_(att, 2, idSource, "Type or pick a member ID.");
-  smartDrop_(att, 3, nameSource, "Type or pick a full name (last name first).");
-  smartDrop_(att, 4, nicknameSource, "Type or pick a nickname.");
-  smartDrop_(eb, 1, meetingSource, "Type the meeting title, date, or ID.");
-  smartDrop_(eb, 3, idSource, "Type or pick a member ID.");
-  smartDrop_(eb, 4, nameSource, "Type or pick a full name (last name first).");
-  smartDrop_(eb, 5, nicknameSource, "Type or pick a nickname.");
+  var attHeaders = sheetHeaders_(att);
+  var ebHeaders = sheetHeaders_(eb);
+  smartDrop_(att, attHeaders.indexOf("meeting_id") + 1, meetingSource,
+    "Type the meeting title, date, or ID.");
+  smartDrop_(att, attHeaders.indexOf("member_nickname") + 1, nicknameSource,
+    "Type or pick a nickname.");
+  smartDrop_(att, attHeaders.indexOf("member_name") + 1, nameSource,
+    "Type or pick a full name (last name first).");
+  smartDrop_(att, attHeaders.indexOf("member_id") + 1, idSource,
+    "Type or pick a member ID.");
+  smartDrop_(eb, ebHeaders.indexOf("meeting_id") + 1, meetingSource,
+    "Type the meeting title, date, or ID.");
+  smartDrop_(eb, ebHeaders.indexOf("member_id") + 1, idSource,
+    "Type or pick a member ID.");
+  smartDrop_(eb, ebHeaders.indexOf("member_name") + 1, nameSource,
+    "Type or pick a full name (last name first).");
+  smartDrop_(eb, ebHeaders.indexOf("member_nickname") + 1, nicknameSource,
+    "Type or pick a nickname.");
 }
 
 function smartDrop_(sheet, col, sourceRange, help) {
@@ -1654,6 +1885,7 @@ function setupWorkbook() {
   buildLookup_(ss);
   buildEntryPad_(ss);
   applySmartValidations_(ss);
+  applyAttendanceModeRules_(ss);
   auditMemberIdContinuity_(ss);
   refreshAttendanceReport();
 
@@ -1736,16 +1968,16 @@ function buildMeetings_(ss) {
 function buildAttendance_(ss) {
   var sh = ss.insertSheet("Attendance");
   var rows = ATTENDANCE_.map(function (pair) {
-    return [pair[0], pair[1], "", "", "", "1", ""];
+    return [pair[0], "", "", pair[1], "", "1", ""];
   });
   writeTable_(sh,
-    ["meeting_id", "member_id", "member_name", "member_nickname",
+    ["meeting_id", "member_nickname", "member_name", "member_id",
      "attendance_mode", "credit_given", "notes"],
     rows);
-  backfillMemberFields_(ss, sh, 2);
+  backfillMemberFields_(ss, sh, 4);
   dropdownAllowBlank_(sh, 5, ATTENDANCE_MODES);
-  sh.setColumnWidth(3, 180);
-  sh.setColumnWidth(4, 140);
+  sh.setColumnWidth(2, 140);
+  sh.setColumnWidth(3, 190);
 }
 
 function buildEarlyBird_(ss) {

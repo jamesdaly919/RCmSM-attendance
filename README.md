@@ -321,9 +321,24 @@ event to show attendees and absences. Calendar mode plots activities on their
 scheduled dates; selecting a past date shows its activity details, attendees,
 absences, and any recorded Early Birds.
 
-The frontend Report page and backend AttendanceReport tab also show monthly
-totals for In-person, Online, and Mode not recorded. These are unique active
-member-event attendance records, so duplicate rows do not inflate the totals.
+The frontend Report page and backend AttendanceReport tab separate regular
+meeting attendance from monthly makeup credit:
+
+- Weekly columns show regular-meeting members on-site, online, present, and
+  absent. Attendance mode is only recorded for regular meetings.
+- A credited makeup attended anywhere in the same month can fill one missed
+  regular-meeting credit toward the monthly target; it is not tied to the
+  nearest regular week.
+- The monthly goal roster names the exact makeup meeting used by each member.
+  A separate makeup table lists the meeting/date, attendees, absences, and who
+  actually counts toward the goal.
+- Meetings auto-sort by their date. Attendance auto-sorts by the date embedded
+  in `meeting_id`, then by nickname/name/ID.
+
+On EntryPad, nickname is immediately beside the attendance checkbox. On the
+Attendance tab, the encoder-facing order is `meeting_id`, `member_nickname`,
+`member_name`, `member_id`. The upgrade moves these named columns in place and
+does not renumber or recreate member IDs or attendance records.
 
 ## Part 5 — Odds and ends
 

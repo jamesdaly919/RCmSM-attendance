@@ -765,6 +765,27 @@ html, body { font-size: 17px; }
 .report-source-list small {
   display: block; color: #8a6210; font-size: 10px; font-weight: 700;
 }
+.report-member-list { margin: 0; padding-left: 18px; }
+.report-member-list li + li { margin-top: 4px; }
+.report-section { margin-top: 28px; padding-top: 22px; border-top: 1px solid var(--line); }
+.report-table--roster { min-width: 860px; }
+.report-table--roster th, .report-table--roster td { text-align: left; vertical-align: top; }
+.report-table--roster tbody th { min-width: 210px; }
+.report-makeup-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px; margin-top: 16px;
+}
+.report-makeup-card { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+.report-makeup-card header { padding: 15px; background: linear-gradient(135deg, var(--mist), #fff8e5); }
+.report-makeup-card header span { color: var(--azure); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+.report-makeup-card h4 { margin: 4px 0; font-size: 17px; }
+.report-makeup-card header small { color: var(--slate); }
+.report-makeup-card > div { padding: 15px; font-size: 13px; }
+.report-makeup-card h5 { margin: 0 0 8px; color: var(--slate); }
+.report-makeup-card h5:not(:first-child) { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.report-counts, .report-extra { display: inline-block; margin-left: 5px; font-size: 10px; font-style: normal; font-weight: 800; }
+.report-counts { color: #24733a; }
+.report-extra { color: #886510; }
 @media (max-width: 520px) {
   .report-average { grid-template-columns: 1fr; }
   .report-mode-summary__grid { grid-template-columns: 1fr; }
@@ -772,6 +793,7 @@ html, body { font-size: 17px; }
   .report-evidence__head p { margin-top: 6px; }
   .report-week-detail dl { grid-template-columns: 1fr; gap: 3px; }
   .report-week-detail dd + dt { margin-top: 8px; }
+  .report-makeup-grid { grid-template-columns: 1fr; }
 }
 
 /* ============================================================

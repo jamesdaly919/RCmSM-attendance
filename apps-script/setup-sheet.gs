@@ -57,7 +57,7 @@ function onOpen() {
     .addItem("Refresh sortable EntryPad roster", "refreshEntryPadRoster")
     .addItem("Repair connected member fields", "repairConnectedMemberFields")
     .addItem("Audit member ID continuity", "auditMemberIdContinuity")
-    .addItem("Sort meetings and attendance now", "sortMeetingsAndAttendance")
+    .addItem("Sort meetings, attendance, and Early Bird", "sortMeetingsAndAttendance")
     .addItem("Refresh monthly attendance report", "refreshAttendanceReport")
     .addItem("Upgrade sheet to latest version", "upgradeSheet")
     .addToUi();
@@ -121,6 +121,9 @@ function onEdit(e) {
       enforceAttendanceModeForEdit_(e);
       sortAttendanceByMeetingDate_(sh);
       applyAttendanceModeRules_(e.source);
+    }
+    if (name === "EarlyBird") {
+      sortEarlyBirdByMeetingDate_(sh);
     }
     if (name === "Attendance" || name === "Members") {
       refreshAttendanceReport();
@@ -228,7 +231,8 @@ function sortMeetingsAndAttendance() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   sortMeetingsByDate_(ss.getSheetByName("Meetings"));
   sortAttendanceByMeetingDate_(ss.getSheetByName("Attendance"));
-  ss.toast("Meetings and Attendance sorted by meeting date.", "Rotary Tools", 5);
+  sortEarlyBirdByMeetingDate_(ss.getSheetByName("EarlyBird"));
+  ss.toast("Meetings, Attendance, and Early Bird sorted by meeting date.", "Rotary Tools", 5);
 }
 
 function sortMeetingsByDate_(sh) {
@@ -257,6 +261,29 @@ function sortAttendanceByMeetingDate_(sh) {
     var aid = extractMeetingId_(a[meetingIdx]) || String(a[meetingIdx] || "");
     var bid = extractMeetingId_(b[meetingIdx]) || String(b[meetingIdx] || "");
     return aid.localeCompare(bid) ||
+      String(a[nickIdx] || "").localeCompare(String(b[nickIdx] || "")) ||
+      String(a[nameIdx] || "").localeCompare(String(b[nameIdx] || "")) ||
+      String(a[idIdx] || "").localeCompare(String(b[idIdx] || ""));
+  });
+  sh.getRange(2, 1, rows.length, width).setValues(rows);
+}
+
+function sortEarlyBirdByMeetingDate_(sh) {
+  if (!sh || sh.getLastRow() < 3) return;
+  var headers = sheetHeaders_(sh);
+  var meetingIdx = headers.indexOf("meeting_id");
+  var rankIdx = headers.indexOf("rank");
+  var nickIdx = headers.indexOf("member_nickname");
+  var nameIdx = headers.indexOf("member_name");
+  var idIdx = headers.indexOf("member_id");
+  if (meetingIdx < 0) return;
+  var width = sh.getLastColumn();
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues();
+  rows.sort(function (a, b) {
+    var aid = extractMeetingId_(a[meetingIdx]) || String(a[meetingIdx] || "");
+    var bid = extractMeetingId_(b[meetingIdx]) || String(b[meetingIdx] || "");
+    return aid.localeCompare(bid) ||
+      ((parseInt(a[rankIdx], 10) || 999) - (parseInt(b[rankIdx], 10) || 999)) ||
       String(a[nickIdx] || "").localeCompare(String(b[nickIdx] || "")) ||
       String(a[nameIdx] || "").localeCompare(String(b[nameIdx] || "")) ||
       String(a[idIdx] || "").localeCompare(String(b[idIdx] || ""));
@@ -330,7 +357,10 @@ function saveEntryPad() {
   var eb = ss.getSheetByName("EarlyBird");
   var memberIndex = buildMemberIndex_(ss);
   var existingAttendance = existingAttendanceRows_(att);
-  var existingEB = existingPairs_(eb, 1, 3);              // meeting|member
+  var ebHeaders = sheetHeaders_(eb);
+  var existingEB = existingPairs_(
+    eb, ebHeaders.indexOf("meeting_id") + 1, ebHeaders.indexOf("member_id") + 1
+  );                                                        // meeting|member
   var existingRanks = existingMeetingValues_(eb, 1, 2);   // meeting|rank
 
   var attRows = [], ebRows = [], modeUpdates = [];
@@ -379,7 +409,7 @@ function saveEntryPad() {
       } else if (existingEB[pairKey] || existingRanks[meetingId + "|" + ebRank]) {
         ebIgnored++;
       } else {
-        ebRows.push([meetingId, ebRank, memberId, member.name, member.nickname, ""]);
+        ebRows.push([meetingId, ebRank, member.nickname, member.name, memberId, ""]);
         existingEB[pairKey] = true;
         existingRanks[meetingId + "|" + ebRank] = true;
       }
@@ -411,6 +441,7 @@ function saveEntryPad() {
   // 4b. Keep every tab comfortably ahead of its data.
   ensureCapacity_(ss);
   sortAttendanceByMeetingDate_(att);
+  sortEarlyBirdByMeetingDate_(eb);
   applyAttendanceModeRules_(ss);
   refreshAttendanceReport();
 
@@ -729,6 +760,7 @@ function upgradeSheet() {
   ensureCapacity_(ss);
   sortMeetingsByDate_(ss.getSheetByName("Meetings"));
   sortAttendanceByMeetingDate_(ss.getSheetByName("Attendance"));
+  sortEarlyBirdByMeetingDate_(ss.getSheetByName("EarlyBird"));
   applyAttendanceModeRules_(ss);
   refreshAttendanceReport();
   SpreadsheetApp.flush();
@@ -952,8 +984,7 @@ function moveNamedColumn_(sh, header, targetColumn) {
   sh.moveColumns(sh.getRange(1, current, sh.getMaxRows(), 1), targetColumn);
 }
 
-// Attendance is encoder-first: nickname, full name, then authoritative ID.
-// EarlyBird retains ID/name/nickname because rank is its primary entry field.
+// Both encoder tabs put nickname before full name and authoritative member ID.
 function ensureMemberColumns_(ss) {
   ["Attendance", "EarlyBird"].forEach(function (sheetName) {
     var sh = ss.getSheetByName(sheetName);
@@ -982,6 +1013,10 @@ function ensureMemberColumns_(ss) {
       moveNamedColumn_(sh, "member_nickname", 2);
       moveNamedColumn_(sh, "member_name", 3);
       moveNamedColumn_(sh, "member_id", 4);
+    } else if (sheetName === "EarlyBird") {
+      moveNamedColumn_(sh, "member_nickname", 3);
+      moveNamedColumn_(sh, "member_name", 4);
+      moveNamedColumn_(sh, "member_id", 5);
     }
 
     headers = sheetHeaders_(sh);
@@ -1992,11 +2027,12 @@ function buildAttendance_(ss) {
 function buildEarlyBird_(ss) {
   var sh = ss.insertSheet("EarlyBird");
   writeTable_(sh,
-    ["meeting_id", "rank", "member_id", "member_name", "member_nickname", "notes"],
+    ["meeting_id", "rank", "member_nickname", "member_name", "member_id", "notes"],
     []);
   dropdown_(sh, 2, ["1","2","3","4","5","6","7","8","9","10"]);
-  sh.setColumnWidth(4, 180);
-  sh.setColumnWidth(5, 140);
+  sh.setColumnWidth(3, 140);
+  sh.setColumnWidth(4, 190);
+  sh.setColumnWidth(5, 90);
 }
 
 // ---------------------------------------------------------- data

@@ -583,18 +583,27 @@ function applyAttendanceModeRules_(ss) {
   if (sh.getLastRow() < 2) return;
   var ids = sh.getRange(2, meetingCol, sh.getLastRow() - 1, 1).getValues();
   var typeByMeeting = meetingTypeMap_(ss);
-  var regularCells = [];
-  ids.forEach(function (row, index) {
+  var regularRule = SpreadsheetApp.newDataValidation()
+    .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build();
+  var rules = [];
+  var backgrounds = [];
+  var notes = [];
+  ids.forEach(function (row) {
     var id = extractMeetingId_(row[0]) || String(row[0] || "").trim();
     if (typeByMeeting[id] === "regular") {
-      regularCells.push(sh.getRange(index + 2, modeCol).getA1Notation());
+      rules.push([regularRule]);
+      backgrounds.push(["#FFF8E1"]);
+      notes.push(["Choose In-person or Online for this regular meeting."]);
+    } else {
+      rules.push([null]);
+      backgrounds.push(["#EEEEEE"]);
+      notes.push(["Attendance mode is only used for regular meetings."]);
     }
   });
-  if (regularCells.length) {
-    sh.getRangeList(regularCells).setDataValidation(SpreadsheetApp.newDataValidation()
-      .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build())
-      .setBackground("#FFF8E1").setNote("Choose In-person or Online for this regular meeting.");
-  }
+  sh.getRange(2, modeCol, ids.length, 1)
+    .setDataValidations(rules)
+    .setBackgrounds(backgrounds)
+    .setNotes(notes);
 }
 
 function existingAttendanceRows_(sheet) {

@@ -216,6 +216,29 @@ fill automatically. If a value is ambiguous, enter the Member ID.
 Early Bird rules the app enforces: rank 1 = first to arrive, ranks 1–10 only,
 one award per row, regular meetings only.
 
+### "Oops — that meeting was actually on a different date"
+
+It happens: attendance is recorded, and only later does the admin realize the
+meeting itself was entered with the wrong date (or wrong type/title). The
+meeting ID (e.g. `20260721-REG`) is built from the date, so just retyping the
+date used to leave the ID — and every attendance row pointing at it — stuck on
+the old date. Two ways to fix it now, both safe after attendance exists:
+
+1. **Just fix the date on the Meetings tab.** Type the correct date
+   (YYYY-MM-DD) into the meeting's date cell. The script notices the ID no
+   longer matches, rewrites it (keeping its suffix, e.g. `20260721-REG` →
+   `20260728-REG`), and moves every matching **Attendance**, **EarlyBird**,
+   and **Reports** row to the new ID. A toast confirms how many rows moved.
+2. **Rotary Tools → Edit a meeting (date / type / title)…** Opens a dialog:
+   pick the meeting, change its date, type, and/or title, and click Apply.
+   The ID is regenerated from the new values and all connected rows follow.
+   Use this when the type or title changes, since direct type/title edits on
+   the tab deliberately never rename a (possibly hand-typed) ID.
+
+Recorded attendance is never deleted or duplicated by either path — rows are
+renamed in place. If the corrected date collides with an existing meeting's ID,
+a number is appended (`…-REG2`) exactly like new meetings.
+
 ### Monthly routine (summary)
 
 1. Start of month: add the month's Monday meetings to **Meetings**.

@@ -78,6 +78,10 @@ From now on, any time you change code on GitHub, Vercel republishes
 automatically. You will rarely need to touch the code, though — everyday
 updates happen only in the Google Sheet.
 
+For local verification, run `npm install`, `npx vite build`, and then
+`node test/harness.cjs` from the repository root. The Apps Script harness
+should finish with `ALL SCENARIOS PASS`.
+
 ---
 
 ## Part 2 — How the Google Sheet works day to day
@@ -182,8 +186,11 @@ sortable EntryPad roster**. This is the fast way to record a whole meeting
 2. **Tick "Present"** beside every member who attended.
 3. Choose **In-person** or **Online** for every checked member. EntryPad will
    not save until every attendee has a mode.
-4. For **regular meetings**, type the **EB rank** (1–10) beside the first ten
-   arrivals. Leave it blank for everyone else.
+4. For **regular meetings and board meetings**, type the **EB rank** beside
+   the first arrivals. The dropdown only offers the ranks that event has:
+   normally 1–10, but **1–5 when a board meeting and a regular meeting fall
+   on the same day** (5 slots each, 10 for the day). Leave it blank for
+   everyone else. Other makeup/special events have no Early Bird.
 5. Leave **Credit** blank (blank = 1) unless the event is worth more.
 6. Tick the green **SAVE** checkbox.
 
@@ -213,8 +220,13 @@ correction, a late report, or deleting a mistaken row. Enter or select the
 member ID, full name, or nickname in its matching column. The connected fields
 fill automatically. If a value is ambiguous, enter the Member ID.
 
-Early Bird rules the app enforces: rank 1 = first to arrive, ranks 1–10 only,
-one award per row, regular meetings only.
+Early Bird rules the app enforces: rank 1 = first to arrive, one award per
+row, regular and board meetings only (a "board meeting" is any makeup/special
+event whose title contains the word *board*). Slots per meeting: 10, or 5 each
+when a board meeting and a regular meeting share a date. Ranks above a
+meeting's slot count are flagged on the Data Check page and not counted.
+**Rotary Tools → Enforce Early Bird slot caps (trim extras)** deletes rows
+already recorded above the cap.
 
 ### "Oops — that meeting was actually on a different date"
 
@@ -334,8 +346,9 @@ updated. Upgrades never renumber the existing Members tab.
 - **Total credits recorded** = raw sum including extras above 4.
 - **Projects** = attended events marked `is_project = yes`, counted per month
   and per Rotary year for the Projects leaderboard.
-- **Early Bird counts** = number of EarlyBird rows per member, shown per month
-  and per Rotary year (July–June).
+- **Early Bird counts** = number of EarlyBird rows per member within each
+  meeting's slot cap (10; 5 each when a board and a regular meeting share a
+  day), shown per month and per Rotary year (July–June).
 - Only **Active** members count in club stats and leaderboards; Inactive
   members can still be looked up individually.
 

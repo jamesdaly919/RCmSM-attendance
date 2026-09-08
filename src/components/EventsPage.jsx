@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { MonthPicker, prettyDate, TypeTag } from "./Shared.jsx";
-import { monthKey, monthLabel, memberName, isCancelled, isProject } from "../lib/stats.js";
+import { monthKey, monthLabel, memberName, isCancelled, isProject, isBoardMeeting } from "../lib/stats.js";
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -43,6 +43,8 @@ function EventCard({
   const count = model.meetingAttendance.get(meeting.meeting_id) || 0;
   const birds = model.ebByMeeting.get(meeting.meeting_id) || [];
   const isRegular = (meeting.meeting_type || "").toLowerCase() === "regular";
+  const ebSlots = model.ebSlotsByMeeting.get(meeting.meeting_id) || 0;
+  const ebSharedDay = ebSlots > 0 && ebSlots < model.slots;
   const attendeeIds = new Set(
     model.attendance
       .filter((row) => row.meeting_id === meeting.meeting_id && row.member_id)
@@ -140,10 +142,13 @@ function EventCard({
         </div>
       )}
 
-      {!cancelled && showEarlyBirds && (isRegular || birds.length > 0) && (
+      {!cancelled && showEarlyBirds && (ebSlots > 0 || birds.length > 0) && (
         <div className="event-card__birds">
           <span className="event-card__birds-label">
-            Early Birds{isRegular ? ` (first ${model.slots} to arrive)` : ""}
+            Early Birds{ebSlots > 0 ? ` (first ${ebSlots} to arrive)` : ""}
+            {ebSharedDay
+              ? ` · ${isBoardMeeting(meeting) ? "shares the day with the regular meeting" : "shares the day with a board meeting"}`
+              : ""}
           </span>
           {birds.length === 0 ? (
             <span className="muted">none recorded yet</span>

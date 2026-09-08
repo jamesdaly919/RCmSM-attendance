@@ -82,6 +82,40 @@ export function isProject(mt) {
   return /^y/i.test((mt.is_project || "").trim());
 }
 
+// A board meeting is any non-regular event whose title contains "board".
+export function isBoardMeeting(mt) {
+  if ((mt.meeting_type || "").trim().toLowerCase() === "regular") return false;
+  return /\bboard\b/i.test(mt.activity_title || "");
+}
+
+// ---------- Early Bird slots ----------
+// Club rule (mirrored in apps-script/setup-sheet.gs):
+//   regular meeting alone on its day ........ 10 slots
+//   board meeting alone on its day .......... 10 slots
+//   board + regular on the SAME day ......... 5 slots EACH
+//   any other makeup/special event .......... 0 (no Early Bird)
+export function earlyBirdSlotsFor(mt, meetings, defaultSlots = 10) {
+  const type = (mt.meeting_type || "").trim().toLowerCase();
+  const regular = type === "regular";
+  const board = isBoardMeeting(mt);
+  if (!regular && !board) return 0;
+  if (isCancelled(mt)) return 0;
+  if (!DATE_RE.test(mt.date || "")) return defaultSlots;
+  const shared = meetings.some((other) => {
+    if (other.meeting_id === mt.meeting_id) return false;
+    if (isCancelled(other) || other.date !== mt.date) return false;
+    return regular ? isBoardMeeting(other) : (other.meeting_type || "").trim().toLowerCase() === "regular";
+  });
+  return shared ? Math.floor(defaultSlots / 2) : defaultSlots;
+}
+
+// True when this meeting's slots were halved because a board meeting
+// and a regular meeting share the date.
+export function earlyBirdSharesDay(mt, meetings, defaultSlots = 10) {
+  const slots = earlyBirdSlotsFor(mt, meetings, defaultSlots);
+  return slots > 0 && slots < defaultSlots;
+}
+
 // ---------- core model ----------
 
 export function buildModel(raw) {
@@ -147,9 +181,14 @@ export function buildModel(raw) {
   }
 
   // Early Bird counts.
-  // Club policy: Early Bird counts at ANY non-cancelled meeting where the
-  // secretary records Early Bird rows — regular meetings always run it,
-  // other meetings (board, special) run it at the members' behest.
+  // Club policy: Early Bird runs at regular meetings and board meetings.
+  // Each gets `slots` (10); when a board and a regular meeting share a
+  // day they get 5 each. Only ranks within the meeting's cap count —
+  // anything above it is reported by validate() and never scored.
+  const ebSlotsByMeeting = new Map(); // meetingId -> slots (0 = no Early Bird)
+  for (const mt of meetings) {
+    if (mt.meeting_id) ebSlotsByMeeting.set(mt.meeting_id, earlyBirdSlotsFor(mt, meetings, slots));
+  }
   const ebMonthly = new Map(); // memberId -> Map(monthKey -> count)
   const ebYearly = new Map(); // memberId -> count (current Rotary year)
   const ebByMeeting = new Map(); // meetingId -> [{rank, member_id}]
@@ -157,6 +196,9 @@ export function buildModel(raw) {
     const mt = meetingById.get(row.meeting_id);
     if (!mt || !memberById.has(row.member_id)) continue;
     if (isCancelled(mt)) continue;
+    const cap = ebSlotsByMeeting.get(row.meeting_id) || 0;
+    const rank = parseInt(row.rank, 10);
+    if (!(rank >= 1 && rank <= cap)) continue; // over the cap or event has no Early Bird
     const mk = monthKey(mt.date);
     if (!ebMonthly.has(row.member_id)) ebMonthly.set(row.member_id, new Map());
     const perMonth = ebMonthly.get(row.member_id);
@@ -177,7 +219,7 @@ export function buildModel(raw) {
     reports: reports || [],
     memberById, meetingById, resolveMember, resolveMeeting,
     credits, meetingAttendance,
-    ebMonthly, ebYearly, ebByMeeting,
+    ebMonthly, ebYearly, ebByMeeting, ebSlotsByMeeting,
     ryStart, ryEnd, inRotaryYear,
   };
 }
@@ -428,9 +470,9 @@ export function validate(model) {
   });
 
   // Early Bird
-  // Club policy: Early Bird can be run at any meeting (regular meetings
-  // always, others at the members' behest), so a non-regular meeting_id
-  // here is fine and raises no warning.
+  // Club policy: Early Bird runs at regular and board meetings only.
+  // Slots per meeting come from earlyBirdSlotsFor(): 10, or 5 each when
+  // a board meeting and a regular meeting share the day.
   const ranksPerMeeting = new Map();
   model.earlybird.forEach((row, i) => {
     const line = `EarlyBird row ${i + 2}`;
@@ -439,17 +481,33 @@ export function validate(model) {
     if (!row.member_id)
       warn(line, `Can't identify the member "${row.member_ref}". Use the member_id, exact nickname, or full name.`);
     const rank = parseInt(row.rank, 10);
-    if (isNaN(rank) || rank < 1 || rank > model.slots)
-      warn(line, `Rank "${row.rank}" should be between 1 and ${model.slots}.`);
-    if (!row.meeting_id) return;
+    if (!row.meeting_id) {
+      if (isNaN(rank) || rank < 1 || rank > model.slots)
+        warn(line, `Rank "${row.rank}" should be between 1 and ${model.slots}.`);
+      return;
+    }
+    const mt = model.meetingById.get(row.meeting_id);
+    const cap = model.ebSlotsByMeeting.get(row.meeting_id) || 0;
+    if (cap === 0) {
+      if (mt && !isCancelled(mt))
+        warn(line, `"${mt.activity_title}" (${row.meeting_id}) does not run Early Bird — only regular and board meetings do. This row is not counted.`);
+      return;
+    }
+    if (isNaN(rank) || rank < 1 || rank > cap) {
+      const why = cap < model.slots
+        ? ` (a board meeting and a regular meeting share ${mt.date}, so each gets ${cap} slots)`
+        : "";
+      warn(line, `Rank "${row.rank}" should be between 1 and ${cap} for ${row.meeting_id}${why}. This row is not counted.`);
+      return;
+    }
     const key = row.meeting_id;
     if (!ranksPerMeeting.has(key)) ranksPerMeeting.set(key, new Set());
     const set = ranksPerMeeting.get(key);
     if (set.has(rank))
       warn(line, `Rank ${rank} is used twice for meeting ${row.meeting_id}.`);
     set.add(rank);
-    if (set.size > model.slots)
-      warn(line, `Meeting ${row.meeting_id} has more than ${model.slots} Early Bird awardees.`);
+    if (set.size > cap)
+      warn(line, `Meeting ${row.meeting_id} has more than ${cap} Early Bird awardees.`);
   });
 
   return issues;

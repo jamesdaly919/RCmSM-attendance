@@ -47,13 +47,23 @@ test("September two-credit events feed member totals and the monthly goal report
   const vite = await createServer({ server: { middlewareMode: true }, appType: "custom" });
   try {
     const { monthlyAttendanceReport } = await vite.ssrLoadModule("/src/components/AttendanceReportPage.jsx");
-    const report = monthlyAttendanceReport(model, "2026-09");
+    const report = monthlyAttendanceReport(model, "2026-09", "2026-09-22");
     const goal = (id) => report.memberGoals.find((item) => item.member.member_id === id);
     assert.equal(goal("M049").makeupCreditsUsed, 2);
     assert.equal(goal("M049").extra.length, 1);
     assert.equal(goal("M037").makeupCreditsUsed, 4);
     assert.deepEqual(goal("M037").used.map((row) => row.appliedCredits), [2, 2]);
     assert.equal(goal("M020").makeupCreditsUsed, 2);
+    assert.equal(report.completedWeekCount, 3);
+    assert.equal(report.weeks[3].absentMembers.length, 0);
+    assert.equal(report.weeks[3].completedMeetings.length, 0);
+    assert.equal(report.required, 4); // Upcoming week still sets the full-month goal.
+    assert.equal(report.average, 2 / 3); // Future week's zero is not averaged in.
+    const meetingDay = monthlyAttendanceReport(model, "2026-09", "2026-09-28");
+    assert.equal(meetingDay.completedWeekCount, 3); // Count only after the date passes.
+    const afterMeeting = monthlyAttendanceReport(model, "2026-09", "2026-09-29");
+    assert.equal(afterMeeting.completedWeekCount, 4);
+    assert.equal(afterMeeting.weeks[3].absentMembers.length, 3);
   } finally {
     await vite.close();
   }

@@ -1951,6 +1951,7 @@ function tableObjects_(sh) {
 function refreshAttendanceReport() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ensureAttendanceReportTab_(ss);
+  var today = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd");
   var month = String(sh.getRange("B1").getDisplayValue() || "").trim();
   if (!/^\d{4}-\d{2}$/.test(month)) {
     month = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "yyyy-MM");
@@ -2023,12 +2024,16 @@ function refreshAttendanceReport() {
   });
 
   var regularByWeek = [{}, {}, {}, {}];
+  var completedByWeek = [[], [], [], []];
   var regularMeetingIds = {};
   var makeupMeetingIds = {};
   for (var assignmentWeek = 0; assignmentWeek < 4; assignmentWeek++) {
     regularMeetings[assignmentWeek].forEach(function (meeting) {
       var id = String(meeting.meeting_id || "").trim();
-      regularByWeek[assignmentWeek][id] = true;
+      if (normDate_(meeting.date) < today) {
+        completedByWeek[assignmentWeek].push(meeting);
+        regularByWeek[assignmentWeek][id] = true;
+      }
       regularMeetingIds[id] = true;
     });
   }
@@ -2096,6 +2101,10 @@ function refreshAttendanceReport() {
       for (var emptyRow = 1; emptyRow < rows.length; emptyRow++) rows[emptyRow].push("—");
       continue;
     }
+    if (completedByWeek[i].length === 0) {
+      for (var upcomingRow = 1; upcomingRow < rows.length; upcomingRow++) rows[upcomingRow].push("Pending");
+      continue;
+    }
     scheduledWeekCount++;
     var presentCount = Object.keys(present[i]).length;
     var absentIds = Object.keys(eligible).filter(function (id) {
@@ -2108,9 +2117,9 @@ function refreshAttendanceReport() {
     rows[5].push(absentIds);
     totalPresent += presentCount;
   }
-  var average = scheduledWeekCount ? totalPresent / scheduledWeekCount : 0;
+  var average = scheduledWeekCount ? totalPresent / scheduledWeekCount : "—";
   var activeCount = Object.keys(eligible).length;
-  var rate = activeCount ? average / activeCount : 0;
+  var rate = scheduledWeekCount && activeCount ? average / activeCount : "—";
   var required = Math.min(4, regular.length);
   var makeupUsed = {};
   var goalRows = [["MEMBER MONTHLY GOAL", "Regular", "Makeup used", "Result", "Makeup meeting(s) used"]];
@@ -2153,7 +2162,7 @@ function refreshAttendanceReport() {
   sh.getRange(summaryStart, 1, 6, 2).setValues([
     ["Average Attendance for the Month", average],
     ["Average Attendance Rate", rate],
-    ["Scheduled reporting weeks", scheduledWeekCount],
+    ["Completed reporting weeks", scheduledWeekCount],
     ["Regular on-site records", modeTotals.inPerson],
     ["Regular online records", modeTotals.online],
     ["Regular mode not recorded", modeTotals.unrecorded],
@@ -2170,6 +2179,10 @@ function refreshAttendanceReport() {
   for (var detailWeek = 0; detailWeek < 4; detailWeek++) {
     var regularLabels = regularMeetings[detailWeek].map(meetingLabel_).join("\n") || "Not scheduled";
     detailRows.push(["Week " + (detailWeek + 1), "Regular meeting(s)", regularLabels, "", ""]);
+    if (regularMeetings[detailWeek].length && !completedByWeek[detailWeek].length) {
+      detailRows.push(["", "Pending", "Attendance and absences are not counted yet.", "", ""]);
+      continue;
+    }
     detailRows.push(["", "On-site (" + Object.keys(onSite[detailWeek]).length + ")", nameList_(Object.keys(onSite[detailWeek])), "", ""]);
     detailRows.push(["", "Online (" + Object.keys(online[detailWeek]).length + ")", nameList_(Object.keys(online[detailWeek])), "", ""]);
     detailRows.push(["", "Absent (" + (activeCount - Object.keys(present[detailWeek]).length) + ")",
@@ -2192,6 +2205,7 @@ function refreshAttendanceReport() {
   var makeupRows = [["MAKEUP MEETING TRANSPARENCY", "Meeting / date", "Attended", "Did not attend", "Counts as monthly makeup"]];
   other.forEach(function (meeting) {
     var meetingId = String(meeting.meeting_id || "").trim();
+    var isUpcoming = normDate_(meeting.date) >= today;
     var attendees = Object.keys(makeupAttendees[meetingId] || {});
     var absentees = Object.keys(eligible).filter(function (id) { return !makeupAttendees[meetingId] || !makeupAttendees[meetingId][id]; });
     var counting = Object.keys(makeupUsed[meetingId] || {}).map(function (id) {
@@ -2200,7 +2214,10 @@ function refreshAttendanceReport() {
         " credit" + (credits === 1 ? "" : "s") + " toward monthly goal";
     }).join("\n") || "None (attendees already met the goal or no credited attendance)";
     var calendarWeek = Math.min(4, Math.floor((parseInt(normDate_(meeting.date).slice(8, 10), 10) - 1) / 7) + 1);
-    makeupRows.push(["Calendar Week " + calendarWeek, meetingLabel_(meeting), nameList_(attendees), nameList_(absentees), counting]);
+    makeupRows.push(["Calendar Week " + calendarWeek, meetingLabel_(meeting),
+      isUpcoming ? "Pending" : nameList_(attendees),
+      isUpcoming ? "Not counted yet" : nameList_(absentees),
+      isUpcoming ? "Not counted yet" : counting]);
   });
   if (other.length === 0) makeupRows.push(["—", "No makeup/special meetings scheduled", "—", "—", "—"]);
   var makeupStart = goalStart + goalRows.length + 2;

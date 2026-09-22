@@ -3,7 +3,7 @@ import { SegmentRing } from "./Ring.jsx";
 import { MonthPicker, MemberPicker, StatusChip, prettyDate, TypeTag } from "./Shared.jsx";
 import { REPORT_URL } from "../config.js";
 import {
-  memberMonth, memberYearCredits, memberYearProjects, memberMeetingsAttended,
+  attendanceCredit, memberMonth, memberYearCredits, memberYearProjects, memberMeetingsAttended,
   upcomingMeetings, pendingReportSet, isCancelled,
   monthKey, monthLabel, memberName,
 } from "../lib/stats.js";
@@ -89,8 +89,7 @@ export default function MemberPage({ model, memberId, mk, months, setMonth, toda
           </p>
           {stat.status === "needs" && (
             <p className="member-hero__hint">
-              {stat.remaining} more Monday meeting{stat.remaining > 1 ? "s" : ""} or makeup
-              activit{stat.remaining > 1 ? "ies" : "y"} will complete this month.
+              {stat.remaining} more attendance credit{stat.remaining === 1 ? "" : "s"} will complete this month.
             </p>
           )}
           {stat.status === "exceeded" && (
@@ -158,6 +157,10 @@ export default function MemberPage({ model, memberId, mk, months, setMonth, toda
 
 // One event row with attended/missed/upcoming state and the report flow.
 function EventRow({ mt, state, member, model }) {
+  const attendanceRow = state === "attended"
+    ? model.attendance.find((row) => row.meeting_id === mt.meeting_id && row.member_id === member.member_id)
+    : null;
+  const earnedCredits = attendanceRow ? attendanceCredit(attendanceRow, mt) : 0;
   const pending = pendingReportSet(model);
   const alreadyReported = pending.has(member.member_id + "|" + mt.meeting_id);
   const [phase, setPhase] = useState(alreadyReported ? "reported" : "idle"); // idle | form | sending | sent | reported
@@ -197,7 +200,9 @@ function EventRow({ mt, state, member, model }) {
         </span>
         <div className="event-check__info">
           <strong>{mt.activity_title}</strong>
-          <span className="muted">{prettyDate(mt.date)} · {labels[state]}</span>
+          <span className="muted">{prettyDate(mt.date)} · {labels[state]}
+            {attendanceRow ? ` · ${earnedCredits} credit${earnedCredits === 1 ? "" : "s"}` : ""}
+          </span>
         </div>
         <TypeTag type={mt.meeting_type} />
       </div>

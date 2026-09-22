@@ -184,7 +184,7 @@ sortable EntryPad roster**. This is the fast way to record a whole meeting
    not save until every attendee has a mode.
 4. For **regular meetings**, type the **EB rank** (1–10) beside the first ten
    arrivals. Leave it blank for everyone else.
-5. Leave **Credit** blank (blank = 1) unless the event is worth more.
+5. Leave **Credit** blank to use the event's `credit_value` from Meetings (1 if blank). Enter a number only to override it for that attendee.
 6. Tick the green **SAVE** checkbox.
 
 The script copies everything into the Attendance and EarlyBird tabs, skips
@@ -326,8 +326,8 @@ meeting attendance from monthly makeup credit:
 
 - Weekly columns show regular-meeting members on-site, online, present, and
   absent. Attendance mode is only recorded for regular meetings.
-- A credited makeup attended anywhere in the same month can fill one missed
-  regular-meeting credit toward the monthly target; it is not tied to the
+- Makeup credits earned anywhere in the same month can fill missing
+  regular-meeting credits toward the monthly target. A two-credit event can fill two gaps; it is not tied to the
   nearest regular week.
 - The monthly goal roster names the exact makeup meeting used by each member.
   A separate makeup table lists the meeting/date, attendees, absences, and who

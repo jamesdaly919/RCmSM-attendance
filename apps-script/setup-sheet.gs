@@ -397,7 +397,7 @@ function saveEntryPad() {
         member.name,
         memberId,
         attendanceMode,
-        credit === "" ? "1" : credit,
+        credit === "" ? String(meeting.creditValue) : credit,
         notes
       ]);
       existingAttendance.pairs[pairKey] = { row: null, mode: attendanceMode };
@@ -543,11 +543,11 @@ function updateEntryPadModeState_(ss, pad) {
     range.setDataValidation(SpreadsheetApp.newDataValidation()
       .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build())
       .setBackground("#FFF8E1").setNote("Required for regular meetings.");
-    pad.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Credit blank = 1.");
+    pad.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Blank Credit uses the event value.");
   } else {
     range.clearContent().clearDataValidations().setBackground("#EEEEEE")
       .setNote("Not used for makeup or special meetings.");
-    pad.getRange("A3").setValue("Attendance mode is only recorded for regular meetings. EB rank is also regular-only. Credit blank = 1.");
+    pad.getRange("A3").setValue("Attendance mode and EB rank are regular-only. Blank Credit uses the event value.");
   }
 }
 
@@ -679,6 +679,7 @@ function findMeeting_(ss, meetingId) {
     return String(h).trim().toLowerCase();
   });
   var statusIdx = headers.indexOf("status"); // may be -1 on old sheets
+  var creditIdx = headers.indexOf("credit_value");
   var data = sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), lastCol).getValues();
   for (var i = 0; i < data.length; i++) {
     if (String(data[i][0]) === meetingId) {
@@ -687,12 +688,21 @@ function findMeeting_(ss, meetingId) {
         date: data[i][1],
         type: data[i][2],
         title: data[i][3],
+        creditValue: creditIdx >= 0
+          ? attendanceCreditValue_("", { credit_value: data[i][creditIdx] }) : 1,
         cancelled: statusIdx >= 0 &&
           String(data[i][statusIdx]).trim().toLowerCase() === "cancelled",
       };
     }
   }
   return null;
+}
+
+function attendanceCreditValue_(creditGiven, meeting) {
+  var raw = String(creditGiven == null ? "" : creditGiven).trim() ||
+    String(meeting && meeting.credit_value != null ? meeting.credit_value : "").trim() || "1";
+  var value = Number(raw);
+  return isFinite(value) && value >= 0 ? value : 0;
 }
 
 function meetingTypeMap_(ss) {
@@ -1548,8 +1558,9 @@ function refreshAttendanceReport() {
     if (!member || !eligible[member.id]) return;
     var rawMeeting = String(row.meeting_id || "").trim();
     var meetingId = extractMeetingId_(rawMeeting) || rawMeeting;
-    var creditText = String(row.credit_given == null ? "" : row.credit_given).trim();
-    var hasCredit = creditText === "" || (parseFloat(creditText) || 0) > 0;
+    var makeupMeeting = makeupMeetingIds[meetingId];
+    var credits = attendanceCreditValue_(row.credit_given, makeupMeeting);
+    var hasCredit = credits > 0;
     var pair = meetingId + "|" + member.id;
     if (seenPairs[pair]) return;
     seenPairs[pair] = true;
@@ -1565,7 +1576,7 @@ function refreshAttendanceReport() {
     }
     if (hasCredit && makeupMeetingIds[meetingId]) {
       if (!makeupByMember[member.id]) makeupByMember[member.id] = [];
-      makeupByMember[member.id].push(meetingId);
+      makeupByMember[member.id].push({ meetingId: meetingId, credits: credits });
       if (!makeupAttendees[meetingId]) makeupAttendees[meetingId] = {};
       makeupAttendees[meetingId][member.id] = true;
     }
@@ -1614,21 +1625,29 @@ function refreshAttendanceReport() {
     return (memberNames[a] || a).localeCompare(memberNames[b] || b);
   }).forEach(function (id) {
     var regularCount = Math.min(required, Object.keys(regularByMember[id] || {}).length);
-    var needed = Math.max(0, required - regularCount);
+    var remaining = Math.max(0, required - regularCount);
     var available = (makeupByMember[id] || []).sort(function (a, b) {
-      return normDate_(makeupMeetingIds[a].date).localeCompare(normDate_(makeupMeetingIds[b].date));
+      return normDate_(makeupMeetingIds[a.meetingId].date).localeCompare(normDate_(makeupMeetingIds[b.meetingId].date));
     });
-    var used = available.slice(0, needed);
-    used.forEach(function (meetingId) {
-      if (!makeupUsed[meetingId]) makeupUsed[meetingId] = {};
-      makeupUsed[meetingId][id] = true;
+    var used = [];
+    available.forEach(function (entry) {
+      var applied = Math.min(remaining, entry.credits);
+      if (applied <= 0) return;
+      used.push({ meetingId: entry.meetingId, credits: applied });
+      remaining -= applied;
+      if (!makeupUsed[entry.meetingId]) makeupUsed[entry.meetingId] = {};
+      makeupUsed[entry.meetingId][id] = applied;
     });
+    var makeupCreditsUsed = used.reduce(function (sum, entry) { return sum + entry.credits; }, 0);
     goalRows.push([
       memberNames[id] || id,
       regularCount,
-      used.length,
-      Math.min(required, regularCount + used.length) + "/" + required,
-      used.map(function (meetingId) { return meetingLabel_(makeupMeetingIds[meetingId]); }).join("\n") || "—"
+      makeupCreditsUsed,
+      Math.min(required, regularCount + makeupCreditsUsed) + "/" + required,
+      used.map(function (entry) {
+        return meetingLabel_(makeupMeetingIds[entry.meetingId]) +
+          " — " + entry.credits + " credit" + (entry.credits === 1 ? "" : "s") + " used";
+      }).join("\n") || "—"
     ]);
   });
 
@@ -1683,7 +1702,9 @@ function refreshAttendanceReport() {
     var attendees = Object.keys(makeupAttendees[meetingId] || {});
     var absentees = Object.keys(eligible).filter(function (id) { return !makeupAttendees[meetingId] || !makeupAttendees[meetingId][id]; });
     var counting = Object.keys(makeupUsed[meetingId] || {}).map(function (id) {
-      return "• " + (memberNames[id] || id) + " — counts toward monthly goal";
+      var credits = makeupUsed[meetingId][id];
+      return "• " + (memberNames[id] || id) + " — " + credits +
+        " credit" + (credits === 1 ? "" : "s") + " toward monthly goal";
     }).join("\n") || "None (attendees already met the goal or no credited attendance)";
     var calendarWeek = Math.min(4, Math.floor((parseInt(normDate_(meeting.date).slice(8, 10), 10) - 1) / 7) + 1);
     makeupRows.push(["Calendar Week " + calendarWeek, meetingLabel_(meeting), nameList_(attendees), nameList_(absentees), counting]);
@@ -1768,7 +1789,7 @@ function buildEntryPad_(ss) {
   sh.getRange("B2").insertCheckboxes().setBackground("#D7F2DC");
   sh.getRange("C2:H2").merge();
   sh.getRange("C2").setValue("Pick the event, tick attendees, then SAVE.").setFontStyle("italic");
-  sh.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Credit blank = 1.")
+  sh.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Blank Credit uses the event value.")
     .setFontSize(9).setFontColor("#666666");
   sh.getRange("A3:H3").merge();
 

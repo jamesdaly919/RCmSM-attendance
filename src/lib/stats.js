@@ -82,6 +82,15 @@ export function isProject(mt) {
   return /^y/i.test((mt.is_project || "").trim());
 }
 
+// An Attendance row can override a meeting's default credit value. Blank
+// credit_given means the meeting's value applies; blank meeting value is 1.
+export function attendanceCredit(row, meeting) {
+  const raw = String(row.credit_given ?? "").trim() ||
+    String(meeting?.credit_value ?? "").trim() || "1";
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 // ---------- core model ----------
 
 export function buildModel(raw) {
@@ -131,7 +140,7 @@ export function buildModel(raw) {
     const pairKey = row.meeting_id + "|" + row.member_id;
     if (countedPairs.has(pairKey)) continue;
     countedPairs.add(pairKey);
-    const credit = row.credit_given === "" ? 1 : parseFloat(row.credit_given) || 0;
+    const credit = attendanceCredit(row, mt);
     const mk = monthKey(mt.date);
     if (!credits.has(row.member_id)) credits.set(row.member_id, new Map());
     const perMonth = credits.get(row.member_id);

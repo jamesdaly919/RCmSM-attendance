@@ -1,5 +1,5 @@
 import { MonthPicker, prettyDate } from "./Shared.jsx";
-import { isCancelled, memberName, monthKey, monthLabel } from "../lib/stats.js";
+import { attendanceCredit, isCancelled, memberName, monthKey, monthLabel } from "../lib/stats.js";
 
 const WEEK_LABELS = ["Week 1", "Week 2", "Week 3", "Week 4"];
 
@@ -13,11 +13,6 @@ function attendanceMode(value) {
   if (mode === "online") return "Online";
   if (["in-person", "in person", "inperson"].includes(mode)) return "In-person";
   return "";
-}
-
-function hasCredit(row) {
-  if (row.credit_given === "" || row.credit_given == null) return true;
-  return (Number.parseFloat(row.credit_given) || 0) > 0;
 }
 
 function displayName(member) {
@@ -93,14 +88,24 @@ export function monthlyAttendanceReport(model, mk) {
     const memberRows = model.attendance.filter((row) => row.member_id === member.member_id);
     const regularAttended = new Set(memberRows.filter((row) => regularIds.has(row.meeting_id)).map((row) => row.meeting_id));
     const makeupRows = [...new Map(memberRows
-      .filter((row) => makeupById.has(row.meeting_id) && hasCredit(row))
+      .filter((row) => makeupById.has(row.meeting_id) && attendanceCredit(row, makeupById.get(row.meeting_id)) > 0)
       .map((row) => [row.meeting_id, row])).values()]
       .sort((a, b) => String(makeupById.get(a.meeting_id).date).localeCompare(String(makeupById.get(b.meeting_id).date)));
-    const needed = Math.max(0, required - regularAttended.size);
-    return { member, regular: Math.min(required, regularAttended.size), used: makeupRows.slice(0, needed), extra: makeupRows.slice(needed) };
+    const regularCredits = Math.min(required, regularAttended.size);
+    let remaining = Math.max(0, required - regularCredits);
+    const used = [], extra = [];
+    makeupRows.forEach((row) => {
+      const awarded = attendanceCredit(row, makeupById.get(row.meeting_id));
+      const appliedCredits = Math.min(remaining, awarded);
+      if (appliedCredits > 0) used.push({ ...row, appliedCredits });
+      else extra.push(row);
+      remaining -= appliedCredits;
+    });
+    return { member, regular: regularCredits, used, extra,
+      makeupCreditsUsed: used.reduce((sum, row) => sum + row.appliedCredits, 0) };
   });
-  const goalByPair = new Set(memberGoals.flatMap((goal) =>
-    goal.used.map((row) => `${row.meeting_id}|${row.member_id}`)));
+  const goalByPair = new Map(memberGoals.flatMap((goal) =>
+    goal.used.map((row) => [`${row.meeting_id}|${row.member_id}`, row.appliedCredits])));
   const makeupDetails = makeups.map((meeting) => {
     const rows = model.attendance.filter((row) => row.meeting_id === meeting.meeting_id && activeIds.has(row.member_id));
     const attendees = uniqueMembers(rows, activeIds, model.memberById);
@@ -110,7 +115,7 @@ export function monthlyAttendanceReport(model, mk) {
       calendarWeek: Math.min(4, Math.floor((Number(String(meeting.date).slice(8, 10)) - 1) / 7) + 1),
       attendees: attendees.map((member) => ({
         member,
-        counts: goalByPair.has(`${meeting.meeting_id}|${member.member_id}`),
+        creditsUsed: goalByPair.get(`${meeting.meeting_id}|${member.member_id}`) || 0,
       })),
       absent: eligibleMembers.filter((member) => !attendeeIds.has(member.member_id)),
     };
@@ -152,7 +157,7 @@ export default function AttendanceReportPage({ model, mk, months, setMonth }) {
   return <div className="page"><section className="card">
     <div className="card__head"><div><span className="eyebrow">Rotary documentation</span><h2>Attendance Report · {monthLabel(mk)}</h2></div>
       <MonthPicker options={months} value={mk} onChange={setMonth} /></div>
-    <p className="muted report-intro">Weekly figures come only from scheduled regular meetings. A credited makeup anywhere in the same month may fill one missing regular-meeting credit toward the {report.required}/{report.required} goal. It does not change the weekly on-site, online, or absent figures.</p>
+    <p className="muted report-intro">Weekly figures come only from scheduled regular meetings. Makeup credits earned anywhere in the same month may fill missing credits toward the {report.required}/{report.required} goal. A two-credit event may fill two gaps, but does not change the weekly on-site, online, or absent figures.</p>
     {report.warnings.length > 0 && <div className="report-warnings"><strong>Report setup needs attention</strong><ul>{report.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
 
     <div className="report-table-wrap"><table className="report-table"><thead><tr><th>Regular meeting measure</th>{report.weeks.map((week) =>
@@ -178,12 +183,12 @@ export default function AttendanceReportPage({ model, mk, months, setMonth }) {
 
     <section className="report-section"><div className="report-evidence__head"><div><span className="eyebrow">Monthly goal roster</span><h3>Regular attendance plus makeup credits used</h3></div></div>
       <div className="report-table-wrap"><table className="report-table report-table--roster"><thead><tr><th>Member</th><th>Regular</th><th>Makeup used</th><th>Result</th><th>Specific makeup meeting</th></tr></thead><tbody>{report.memberGoals.map((goal) => {
-        const total = Math.min(report.required, goal.regular + goal.used.length);
-        return <tr key={goal.member.member_id}><th>{displayName(goal.member)}</th><td>{goal.regular}</td><td>{goal.used.length}</td><td><strong>{total}/{report.required}</strong></td><td>{goal.used.length ? <MeetingList meetings={goal.used.map((row) => report.makeupDetails.find((detail) => detail.meeting.meeting_id === row.meeting_id)?.meeting).filter(Boolean)} /> : <span className="muted">—</span>}</td></tr>;
+        const total = Math.min(report.required, goal.regular + goal.makeupCreditsUsed);
+        return <tr key={goal.member.member_id}><th>{displayName(goal.member)}</th><td>{goal.regular}</td><td>{goal.makeupCreditsUsed}</td><td><strong>{total}/{report.required}</strong></td><td>{goal.used.length ? <ul className="report-source-list">{goal.used.map((row) => { const meeting = report.makeupDetails.find((detail) => detail.meeting.meeting_id === row.meeting_id)?.meeting; return meeting && <li key={row.meeting_id}><strong>{meeting.activity_title}</strong> · {prettyDate(meeting.date)} · {row.appliedCredits} credit{row.appliedCredits === 1 ? "" : "s"} used <code>{row.meeting_id}</code></li>; })}</ul> : <span className="muted">—</span>}</td></tr>;
       })}</tbody></table></div></section>
 
     <section className="report-section"><div className="report-evidence__head"><div><span className="eyebrow">Makeup transparency</span><h3>Every makeup/special meeting in the month</h3></div><p className="muted">Calendar week is shown for scheduling context only; credit may fill any missing regular attendance in this month.</p></div>
-      <div className="report-makeup-grid">{report.makeupDetails.length ? report.makeupDetails.map((detail) => <article className="report-makeup-card" key={detail.meeting.meeting_id}><header><span>Calendar Week {detail.calendarWeek}</span><h4>{detail.meeting.activity_title}</h4><small>{prettyDate(detail.meeting.date)} · {detail.meeting.meeting_id}</small></header><div><h5>Attended ({detail.attendees.length})</h5>{detail.attendees.length ? <ul className="report-member-list">{detail.attendees.map(({ member, counts }) => <li key={member.member_id}>{displayName(member)} <em className={counts ? "report-counts" : "report-extra"}>{counts ? "Counts as makeup" : "Extra / goal already met"}</em></li>)}</ul> : <span className="muted">None recorded</span>}<h5>Did not attend ({detail.absent.length})</h5><MemberList members={detail.absent} /></div></article>) : <p className="muted">No makeup or special meetings are scheduled this month.</p>}</div>
+      <div className="report-makeup-grid">{report.makeupDetails.length ? report.makeupDetails.map((detail) => <article className="report-makeup-card" key={detail.meeting.meeting_id}><header><span>Calendar Week {detail.calendarWeek}</span><h4>{detail.meeting.activity_title}</h4><small>{prettyDate(detail.meeting.date)} · {detail.meeting.meeting_id} · worth {detail.meeting.credit_value || 1} credit{String(detail.meeting.credit_value || 1) === "1" ? "" : "s"}</small></header><div><h5>Attended ({detail.attendees.length})</h5>{detail.attendees.length ? <ul className="report-member-list">{detail.attendees.map(({ member, creditsUsed }) => <li key={member.member_id}>{displayName(member)} <em className={creditsUsed ? "report-counts" : "report-extra"}>{creditsUsed ? `${creditsUsed} credit${creditsUsed === 1 ? "" : "s"} used` : "Extra / goal already met"}</em></li>)}</ul> : <span className="muted">None recorded</span>}<h5>Did not attend ({detail.absent.length})</h5><MemberList members={detail.absent} /></div></article>) : <p className="muted">No makeup or special meetings are scheduled this month.</p>}</div>
     </section>
   </section></div>;
 }

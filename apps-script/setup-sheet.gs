@@ -1,6 +1,6 @@
 ﻿/**
  * ============================================================
- *  SETUP + ENTRYPAD + REPORTS SCRIPT (v4 · Mutya)
+ *  SETUP + ENTRYPAD + REPORTS SCRIPT (v6 · Mutya)
  *  Rotary Club of Mutya ng Santa Maria — Attendance Sheet
  * ============================================================
  *
@@ -14,6 +14,44 @@
  *    earlier version. Adds anything missing (new Meetings columns,
  *    Reports tab), rebuilds EntryPad/Lookup and the dropdowns.
  *    Safe to run any time; it never touches your recorded data.
+ *
+ *  WHAT'S NEW IN v6
+ *  ----------------
+ *  EARLY BIRD AT BOARD MEETINGS. A board meeting (a makeup/special
+ *  event whose title contains "board") now runs Early Bird, and the
+ *  EntryPad accepts EB ranks for it. Slot rule:
+ *    • regular meeting alone on its day ........ 10 slots
+ *    • board meeting alone on its day .......... 10 slots
+ *    • board + regular on the SAME day ......... 5 slots EACH
+ *    • any other makeup/special event .......... no Early Bird
+ *  The pad's EB dropdown shrinks to the right count, ranks above the
+ *  cap are refused with a clear message, and Rotary Tools → "Enforce
+ *  Early Bird slot caps (trim extras)" removes rows already recorded
+ *  above the cap (ranks 6–10 on a shared day). The app applies the
+ *  same rule when it counts and validates Early Bird.
+ *
+ *  WHAT'S NEW IN v5
+ *  ----------------
+ *  EDIT A MEETING AFTER THE FACT. Rotary Tools → "Edit a meeting
+ *  (date / type / title)…" opens a dialog where the admin picks any
+ *  existing meeting and changes its date, type, and/or title — even
+ *  after attendance has been recorded. The meeting_id is regenerated
+ *  from the new values and every matching row in Attendance,
+ *  EarlyBird, and Reports is moved to the new ID automatically, so
+ *  history stays connected.
+ *
+ *  Editing the DATE cell directly on the Meetings tab now also works:
+ *  the script notices the ID's date part no longer matches, rewrites
+ *  the ID (keeping its suffix), and moves all connected rows with it.
+ *  (Type/title edits made directly on the tab intentionally do NOT
+ *  rename the ID — hand-typed custom IDs are preserved. Use the
+ *  dialog when you want the ID to follow a new type or title.)
+ *
+ *  RELIABLE ENTRYPAD SAVE. The pad now clears and confirms the moment
+ *  the rows are written; sorting, dropdown rules, and the monthly
+ *  report refresh happen afterwards. Previously they ran first, so a
+ *  save from the SAVE checkbox could hit Google's ~30-second trigger
+ *  limit AFTER recording attendance but BEFORE clearing the pad.
  *
  *  WHAT'S NEW IN v3
  *  ----------------
@@ -57,7 +95,9 @@ function onOpen() {
     .addItem("Refresh sortable EntryPad roster", "refreshEntryPadRoster")
     .addItem("Repair connected member fields", "repairConnectedMemberFields")
     .addItem("Audit member ID continuity", "auditMemberIdContinuity")
+    .addItem("Edit a meeting (date / type / title)…", "editMeetingDialog")
     .addItem("Sort meetings, attendance, and Early Bird", "sortMeetingsAndAttendance")
+    .addItem("Enforce Early Bird slot caps (trim extras)", "enforceEarlyBirdSlotCaps")
     .addItem("Refresh monthly attendance report", "refreshAttendanceReport")
     .addItem("Upgrade sheet to latest version", "upgradeSheet")
     .addToUi();
@@ -135,7 +175,11 @@ function onEdit(e) {
     }
     if (name === "Meetings") {
       autoMeetingIds_(sh, e.range);
+      syncMeetingIdsWithDates_(sh, e.range, e.source);
       sortMeetingsByDate_(sh);
+      // a date/title change can alter the Early Bird slot count of the
+      // event currently selected on the pad — keep its EB dropdown honest
+      updateEntryPadModeState_(e.source, e.source.getSheetByName("EntryPad"));
       refreshAttendanceReport();
       return;
     }
@@ -225,6 +269,259 @@ function suffixFromTitle_(title, type) {
   }
   if (!pick) pick = words[0] || type.toUpperCase();
   return pick.slice(0, 10);
+}
+
+// ================================================================
+//  EDIT A MEETING (v5)
+//  Rotary Tools → "Edit a meeting (date / type / title)…" lets the
+//  admin fix a meeting AFTER attendance has already been recorded.
+//  The meeting_id is regenerated from the new date/type/title and
+//  every row that points at the old ID — in Attendance, EarlyBird,
+//  and Reports — is moved to the new ID, so nothing is orphaned.
+//
+//  Date edits typed directly into the Meetings tab are handled too:
+//  syncMeetingIdsWithDates_ (called from onEdit) notices that the
+//  ID's YYYYMMDD part no longer matches the date cell, rewrites the
+//  ID keeping its suffix, and cascades the change the same way.
+// ================================================================
+
+function editMeetingDialog() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var meetings = tableObjects_(ss.getSheetByName("Meetings"))
+    .filter(function (m) { return String(m.meeting_id || "").trim() !== ""; })
+    .map(function (m) {
+      return {
+        id: String(m.meeting_id).trim(),
+        date: normDate_(m.date) || "",
+        type: String(m.meeting_type || "").trim().toLowerCase() || "regular",
+        title: String(m.activity_title || "").trim(),
+      };
+    })
+    .sort(function (a, b) {
+      return (b.date || "").localeCompare(a.date || "") || a.id.localeCompare(b.id);
+    });
+  if (meetings.length === 0) {
+    SpreadsheetApp.getUi().alert("No meetings found on the Meetings tab.");
+    return;
+  }
+  var html = [
+    '<!DOCTYPE html><html><head><base target="_top"><style>',
+    'body{font-family:Arial,Helvetica,sans-serif;font-size:13px;margin:12px;color:#1E2A3A;}',
+    'label{display:block;margin-top:10px;font-weight:bold;}',
+    'select,input{width:100%;box-sizing:border-box;padding:6px;margin-top:3px;font-size:13px;}',
+    '#note{margin-top:10px;padding:8px;background:#EAF1FB;border-radius:4px;font-size:12px;}',
+    '#msg{margin-top:10px;white-space:pre-wrap;font-size:12px;}',
+    'button{margin-top:14px;padding:8px 18px;font-weight:bold;cursor:pointer;}',
+    '</style></head><body>',
+    '<label>Meeting to edit</label><select id="meeting"></select>',
+    '<label>New date</label><input type="date" id="date">',
+    '<label>New type</label><select id="type">',
+    '<option value="regular">regular</option>',
+    '<option value="makeup">makeup</option>',
+    '<option value="special">special</option></select>',
+    '<label>New title</label><input type="text" id="title">',
+    '<div id="note">The meeting ID is regenerated from the new values. Every ',
+    'Attendance, Early Bird, and report row that points at the old ID follows ',
+    'it automatically, so recorded attendance is never lost.</div>',
+    '<button id="apply" onclick="apply()">Apply change</button>',
+    '<div id="msg"></div>',
+    '<scr' + 'ipt>',
+    'var MEETINGS=' + JSON.stringify(meetings) + ';',
+    'var sel=document.getElementById("meeting");',
+    'MEETINGS.forEach(function(m,i){var o=document.createElement("option");',
+    'o.value=i;o.textContent=(m.date||"no date")+" \\u00B7 "+(m.title||"Untitled")+" \\u00B7 "+m.id;',
+    'sel.appendChild(o);});',
+    'function fill(){var m=MEETINGS[sel.value];',
+    'document.getElementById("date").value=m.date;',
+    'document.getElementById("type").value=m.type==="makeup"||m.type==="special"?m.type:"regular";',
+    'document.getElementById("title").value=m.title;}',
+    'sel.onchange=fill;',
+    'function apply(){var m=MEETINGS[sel.value];',
+    'var btn=document.getElementById("apply");var msg=document.getElementById("msg");',
+    'btn.disabled=true;btn.textContent="Working\\u2026";msg.textContent="";',
+    'google.script.run.withSuccessHandler(function(res){',
+    'msg.style.color="#1B5E20";msg.textContent=res;',
+    'btn.disabled=false;btn.textContent="Apply change";',
+    '}).withFailureHandler(function(err){',
+    'msg.style.color="#B00020";msg.textContent=String(err&&err.message?err.message:err);',
+    'btn.disabled=false;btn.textContent="Apply change";',
+    '}).applyMeetingEdit({id:m.id,',
+    'date:document.getElementById("date").value,',
+    'type:document.getElementById("type").value,',
+    'title:document.getElementById("title").value});}',
+    'fill();',
+    '</scr' + 'ipt></body></html>',
+  ].join('');
+  SpreadsheetApp.getUi().showModalDialog(
+    HtmlService.createHtmlOutput(html).setWidth(430).setHeight(480),
+    "Edit a meeting"
+  );
+}
+
+// Called from the dialog. Payload: {id, date (yyyy-mm-dd), type, title}.
+function applyMeetingEdit(payload) {
+  var lock = LockService.getDocumentLock();
+  lock.waitLock(20000);
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName("Meetings");
+    if (!sh) throw new Error("Meetings tab not found.");
+    var oldId = String(payload && payload.id || "").trim();
+    var date = String(payload && payload.date || "").trim();
+    var type = String(payload && payload.type || "").trim().toLowerCase();
+    var title = String(payload && payload.title || "").trim();
+    if (!oldId) throw new Error("No meeting selected.");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new Error("Pick a date (YYYY-MM-DD).");
+    }
+    if (["regular", "makeup", "special"].indexOf(type) < 0) {
+      throw new Error("Type must be regular, makeup, or special.");
+    }
+    if (type !== "regular" && !title) {
+      throw new Error("Makeup/special meetings need a title.");
+    }
+    if (!title) title = "Regular Meeting";
+
+    // find the row + collect the other IDs for uniqueness
+    var lastRow = sh.getLastRow();
+    var ids = sh.getRange(2, 1, Math.max(lastRow - 1, 1), 1).getValues();
+    var row = 0;
+    var existing = {};
+    for (var i = 0; i < ids.length; i++) {
+      var v = String(ids[i][0]).trim();
+      if (!v) continue;
+      if (v === oldId && !row) { row = i + 2; continue; }
+      existing[v.toUpperCase()] = true;
+    }
+    if (!row) {
+      throw new Error('Meeting "' + oldId +
+        '" was not found — close and reopen the dialog, then try again.');
+    }
+
+    var suffix = type === "regular" ? "REG" : suffixFromTitle_(title, type);
+    var base = date.replace(/-/g, "") + "-" + suffix;
+    var newId = base;
+    var k = 2;
+    while (existing[newId.toUpperCase()]) { newId = base + k; k++; }
+
+    // write the meeting row (date as plain text so labels never show a
+    // raw date serial number), then move every connected row to the new ID
+    sh.getRange(row, 2).setNumberFormat("@");
+    sh.getRange(row, 1, 1, 4).setValues([[newId, date, type, title]]);
+    var counts = { Attendance: 0, EarlyBird: 0, Reports: 0 };
+    if (newId !== oldId) counts = renameMeetingReferences_(ss, oldId, newId);
+
+    cleanNonRegularAttendanceModes_(ss);
+    sortMeetingsByDate_(sh);
+    sortAttendanceByMeetingDate_(ss.getSheetByName("Attendance"));
+    sortEarlyBirdByMeetingDate_(ss.getSheetByName("EarlyBird"));
+    applyAttendanceModeRules_(ss);
+    refreshAttendanceReport();
+    SpreadsheetApp.flush();
+
+    var msg = newId === oldId
+      ? "✔ Meeting updated. The ID " + oldId + " did not need to change."
+      : "✔ Meeting updated: " + oldId + " → " + newId + ". Moved " +
+        counts.Attendance + " Attendance, " + counts.EarlyBird +
+        " Early Bird, and " + counts.Reports + " report row(s) to the new ID.";
+    msg += " Close and reopen this dialog to edit another meeting.";
+    ss.toast(msg, "Rotary Tools", 10);
+    return msg;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// onEdit helper: if the DATE cell of a meeting that already has an ID is
+// changed, rewrite the ID's YYYYMMDD part (keeping the suffix) and move
+// every connected Attendance/EarlyBird/Reports row to the new ID.
+function syncMeetingIdsWithDates_(sh, editedRange, ss) {
+  var DATE_COL = 2;
+  if (editedRange.getColumn() > DATE_COL || editedRange.getLastColumn() < DATE_COL) return;
+  var firstRow = Math.max(editedRange.getRow(), 2);
+  var lastRow = editedRange.getLastRow();
+  if (lastRow < firstRow) return;
+  var n = lastRow - firstRow + 1;
+  var block = sh.getRange(firstRow, 1, n, 2).getValues(); // id, date
+
+  var existing = {};
+  sh.getRange(2, 1, Math.max(sh.getLastRow() - 1, 1), 1).getValues()
+    .forEach(function (r) {
+      var v = String(r[0]).trim();
+      if (v) existing[v.toUpperCase()] = true;
+    });
+
+  var messages = [];
+  for (var i = 0; i < n; i++) {
+    var id = String(block[i][0]).trim();
+    if (!/^\d{8}-/.test(id)) continue; // blank or hand-typed non-dated ID
+    var date = normDate_(block[i][1]);
+    if (!date) {
+      if (String(block[i][1]).trim() !== "") {
+        messages.push("⚠ Could not read the new date for " + id +
+          " — type it as YYYY-MM-DD. The ID was not changed.");
+      }
+      continue;
+    }
+    var prefix = date.replace(/-/g, "");
+    if (id.slice(0, 8) === prefix) continue; // already in sync
+    delete existing[id.toUpperCase()];
+    var base = prefix + id.slice(8);
+    var newId = base;
+    var k = 2;
+    while (existing[newId.toUpperCase()]) { newId = base + k; k++; }
+    existing[newId.toUpperCase()] = true;
+    // keep the date stored as plain text so labels never show a serial number
+    sh.getRange(firstRow + i, 2).setNumberFormat("@").setValue(date);
+    sh.getRange(firstRow + i, 1).setValue(newId);
+    var counts = renameMeetingReferences_(ss, id, newId);
+    messages.push("✔ Meeting date changed: " + id + " → " + newId +
+      ". Moved " + counts.Attendance + " Attendance, " + counts.EarlyBird +
+      " Early Bird, and " + counts.Reports + " report row(s) with it.");
+  }
+  if (messages.length > 0) {
+    cleanNonRegularAttendanceModes_(ss);
+    sortAttendanceByMeetingDate_(ss.getSheetByName("Attendance"));
+    sortEarlyBirdByMeetingDate_(ss.getSheetByName("EarlyBird"));
+    applyAttendanceModeRules_(ss);
+    ss.toast(messages.join("\n"), "Rotary Tools", 10);
+  }
+}
+
+// Moves every row that references oldId (exact ID or a label containing
+// it) to newId across Attendance, EarlyBird, and Reports. Also clears a
+// stale EntryPad event selection so nothing is saved under the old ID.
+function renameMeetingReferences_(ss, oldId, newId) {
+  var counts = { Attendance: 0, EarlyBird: 0, Reports: 0 };
+  Object.keys(counts).forEach(function (name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh || sh.getLastRow() < 2) return;
+    var headers = sheetHeaders_(sh);
+    var col = headers.indexOf("meeting_id") + 1;
+    if (!col) return;
+    var range = sh.getRange(2, col, sh.getLastRow() - 1, 1);
+    var values = range.getValues();
+    var changed = false;
+    values.forEach(function (rowArr) {
+      var raw = String(rowArr[0] || "");
+      var id = extractMeetingId_(raw) || raw.trim();
+      if (id !== oldId) return;
+      rowArr[0] = raw.indexOf(oldId) >= 0 ? raw.split(oldId).join(newId) : newId;
+      counts[name]++;
+      changed = true;
+    });
+    if (changed) range.setValues(values);
+  });
+  var pad = ss.getSheetByName("EntryPad");
+  if (pad) {
+    var label = String(pad.getRange("B1").getValue() || "");
+    if (extractMeetingId_(label) === oldId) {
+      pad.getRange("B1").clearContent();
+      pad.getRange("C2").setValue(
+        "Event was renamed to " + newId + " — pick it again from the list.");
+    }
+  }
+  return counts;
 }
 
 function sortMeetingsAndAttendance() {
@@ -322,6 +619,10 @@ function saveEntryPad() {
     return;
   }
   var isRegular = String(meeting.type).toLowerCase() === "regular";
+  // Early Bird slots for THIS event: 10 for a regular or board meeting,
+  // 5 each when a board meeting and a regular meeting share the day,
+  // 0 for every other makeup/special event (see earlyBirdSlotsFor_).
+  var ebSlots = earlyBirdSlotsFor_(ss, meetingId);
 
   // 2. Read the pad rows.
   var n = PAD_LAST_ROW - PAD_FIRST_ROW + 1;
@@ -349,10 +650,10 @@ function saveEntryPad() {
   }
 
   // 3. What already exists (to skip duplicates)?
+  // (Heavy tidy-up — mode cleanup, dropdown rules, sorting, report — now
+  // runs AFTER the save is locked in and the pad is cleared; see step 6.)
   ensureMemberColumns_(ss);
   ensureAttendanceModeColumn_(ss);
-  cleanNonRegularAttendanceModes_(ss);
-  applyAttendanceModeRules_(ss);
   var att = ss.getSheetByName("Attendance");
   var eb = ss.getSheetByName("EarlyBird");
   var memberIndex = buildMemberIndex_(ss);
@@ -364,7 +665,7 @@ function saveEntryPad() {
   var existingRanks = existingMeetingValues_(eb, 1, 2);   // meeting|rank
 
   var attRows = [], ebRows = [], modeUpdates = [];
-  var skippedDup = 0, skippedBad = 0, ebIgnored = 0;
+  var skippedDup = 0, skippedBad = 0, ebIgnored = 0, ebOverCap = 0, ebNoSlots = 0;
 
   for (var i = 0; i < values.length; i++) {
     var present = values[i][0] === true;
@@ -404,8 +705,11 @@ function saveEntryPad() {
     }
 
     if (ebRank !== "") {
-      if (!isRegular) {
-        ebIgnored++;
+      var rankNum = parseInt(ebRank, 10);
+      if (ebSlots === 0) {
+        ebNoSlots++;                       // event does not run Early Bird
+      } else if (!(rankNum >= 1 && rankNum <= ebSlots)) {
+        ebOverCap++;                       // e.g. rank 7 on a 5-slot day
       } else if (existingEB[pairKey] || existingRanks[meetingId + "|" + ebRank]) {
         ebIgnored++;
       } else {
@@ -438,14 +742,11 @@ function saveEntryPad() {
     eb.getRange(eb.getLastRow() + 1, 1, ebRows.length, 6).setValues(ebRows);
   }
 
-  // 4b. Keep every tab comfortably ahead of its data.
-  ensureCapacity_(ss);
-  sortAttendanceByMeetingDate_(att);
-  sortEarlyBirdByMeetingDate_(eb);
-  applyAttendanceModeRules_(ss);
-  refreshAttendanceReport();
-
-  // 5. Clear the pad + report.
+  // 5. Lock in the result FIRST: commit the new rows, clear the pad, and
+  //    show the confirmation. (This used to run after the sorting and
+  //    report refresh below — when the SAVE checkbox trigger hit Google's
+  //    ~30-second limit, the rows landed but the pad never cleared.)
+  SpreadsheetApp.flush();
   clearPadRows_(pad);
   var when = Utilities.formatDate(new Date(), ss.getSpreadsheetTimeZone(), "MMM d, HH:mm");
   var msg = "✔ Saved " + attRows.length + " attendance row" + (attRows.length === 1 ? "" : "s");
@@ -457,9 +758,37 @@ function saveEntryPad() {
   msg += " for " + meeting.title + " (" + when + ").";
   if (skippedDup > 0) msg += " Skipped " + skippedDup + " already recorded.";
   if (ebIgnored > 0) msg += " Ignored " + ebIgnored + " EB rank" + (ebIgnored === 1 ? "" : "s") +
-    (isRegular ? " (not marked present or rank already taken)." : " (event is not a regular meeting).");
+    " (not marked present or rank already taken).";
+  if (ebOverCap > 0) msg += " Ignored " + ebOverCap + " EB rank" + (ebOverCap === 1 ? "" : "s") +
+    " above " + ebSlots + " — this event only has " + ebSlots + " Early Bird slot" +
+    (ebSlots === 1 ? "" : "s") + (ebSlots < EARLY_BIRD_DEFAULT_SLOTS
+      ? " because a board meeting and a regular meeting share this day." : ".");
+  if (ebNoSlots > 0) msg += " Ignored " + ebNoSlots + " EB rank" + (ebNoSlots === 1 ? "" : "s") +
+    " (only regular and board meetings run Early Bird).";
   if (skippedBad > 0) msg += " " + skippedBad + " row(s) had an unreadable member label.";
   finishPad_(pad, status, msg);
+  SpreadsheetApp.flush(); // make the clear + message durable before tidy-up
+
+  // 6. Housekeeping: capacity, sorting, mode cleanup/rules, monthly report.
+  //    If this runs out of time or fails, the attendance is already saved
+  //    and the pad already cleared — it self-heals on the next save, or run
+  //    Rotary Tools → "Sort meetings…" / "Refresh monthly attendance report".
+  try {
+    ensureCapacity_(ss);
+    sortAttendanceByMeetingDate_(att);
+    sortEarlyBirdByMeetingDate_(eb);
+    cleanNonRegularAttendanceModes_(ss);
+    applyAttendanceModeRules_(ss);
+    refreshAttendanceReport();
+  } catch (err) {
+    ss.toast(
+      "Attendance saved and pad cleared, but tidy-up (sorting/report) did not finish: " +
+        err.message +
+        " — run Rotary Tools → Sort meetings… and Refresh monthly attendance report.",
+      "EntryPad",
+      10
+    );
+  }
 }
 
 function clearEntryPad() {
@@ -538,17 +867,181 @@ function updateEntryPadModeState_(ss, pad) {
   var meetingId = extractMeetingId_(label);
   var meeting = meetingId ? findMeeting_(ss, meetingId) : null;
   var regular = meeting && String(meeting.type || "").toLowerCase() === "regular";
-  var range = pad.getRange(PAD_FIRST_ROW, 5, PAD_LAST_ROW - PAD_FIRST_ROW + 1, 1);
+  var n = PAD_LAST_ROW - PAD_FIRST_ROW + 1;
+  var range = pad.getRange(PAD_FIRST_ROW, 5, n, 1);
+  var ebRange = pad.getRange(PAD_FIRST_ROW, 6, n, 1);
+  var slots = meetingId ? earlyBirdSlotsFor_(ss, meetingId) : EARLY_BIRD_DEFAULT_SLOTS;
+  var ebNote;
+  if (slots === 0) {
+    ebNote = "EB rank: not used — only regular and board meetings run Early Bird.";
+    ebRange.clearContent().clearDataValidations().setBackground("#EEEEEE")
+      .setNote("Early Bird is only run at regular and board meetings.");
+  } else {
+    var list = [];
+    for (var r = 1; r <= slots; r++) list.push(String(r));
+    ebRange.setDataValidation(SpreadsheetApp.newDataValidation()
+      .requireValueInList(list, true).setAllowInvalid(false).build())
+      .setBackground(null)
+      .setNote(slots < EARLY_BIRD_DEFAULT_SLOTS
+        ? "Only " + slots + " Early Bird slots today — a board meeting and a regular meeting share this date."
+        : "Early Bird rank 1–" + slots + ".");
+    ebNote = "EB rank 1–" + slots + (slots < EARLY_BIRD_DEFAULT_SLOTS
+      ? " (board + regular meeting share this day: " + slots + " slots each)." : ".");
+  }
   if (regular) {
     range.setDataValidation(SpreadsheetApp.newDataValidation()
       .requireValueInList(ATTENDANCE_MODES, true).setAllowInvalid(false).build())
       .setBackground("#FFF8E1").setNote("Required for regular meetings.");
-    pad.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Blank Credit uses the event value.");
+    pad.getRange("A3").setValue("Attendance mode is required for regular meetings. " + ebNote + " Blank Credit uses the event value.");
   } else {
     range.clearContent().clearDataValidations().setBackground("#EEEEEE")
       .setNote("Not used for makeup or special meetings.");
-    pad.getRange("A3").setValue("Attendance mode and EB rank are regular-only. Blank Credit uses the event value.");
+    pad.getRange("A3").setValue("Attendance mode is only recorded for regular meetings. " + ebNote + " Blank Credit uses the event value.");
   }
+}
+
+// ================================================================
+//  EARLY BIRD SLOTS (v6)
+//  Regular meetings always run Early Bird. A BOARD meeting (any
+//  non-regular event whose title contains the word "board") runs it
+//  too. Each normally gets early_bird_slots_per_regular_meeting (10).
+//  When a board meeting and a regular meeting fall on the SAME DAY,
+//  each gets half (5 + 5) so the day still awards 10 in total. Every
+//  other makeup/special event has 0 slots. The app (src/lib/stats.js)
+//  applies the identical rule.
+// ================================================================
+
+var EARLY_BIRD_DEFAULT_SLOTS = 10;
+
+function isBoardMeeting_(meeting) {
+  var type = String(meeting.meeting_type || "").trim().toLowerCase();
+  if (type === "regular") return false;
+  return /\bboard\b/i.test(String(meeting.activity_title || ""));
+}
+
+function earlyBirdDefaultSlots_(ss) {
+  var sh = ss.getSheetByName("Settings");
+  if (!sh || sh.getLastRow() < 2) return EARLY_BIRD_DEFAULT_SLOTS;
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i][0]).trim() === "early_bird_slots_per_regular_meeting") {
+      var v = parseInt(rows[i][1], 10);
+      return v > 0 ? v : EARLY_BIRD_DEFAULT_SLOTS;
+    }
+  }
+  return EARLY_BIRD_DEFAULT_SLOTS;
+}
+
+// Slots for one meeting object, given the full Meetings list.
+function earlyBirdSlotsForMeeting_(target, meetings, defaultSlots) {
+  var total = defaultSlots || EARLY_BIRD_DEFAULT_SLOTS;
+  var type = String(target.meeting_type || "").trim().toLowerCase();
+  var regular = type === "regular";
+  var board = isBoardMeeting_(target);
+  if (!regular && !board) return 0;
+  if (String(target.status || "").trim().toLowerCase() === "cancelled") return 0;
+  var date = normDate_(target.date);
+  if (!date) return total;
+  var targetId = String(target.meeting_id || "").trim();
+  var shared = meetings.some(function (m) {
+    if (String(m.meeting_id || "").trim() === targetId) return false;
+    if (String(m.status || "").trim().toLowerCase() === "cancelled") return false;
+    if (normDate_(m.date) !== date) return false;
+    var mType = String(m.meeting_type || "").trim().toLowerCase();
+    return regular ? isBoardMeeting_(m) : mType === "regular";
+  });
+  return shared ? Math.floor(total / 2) : total;
+}
+
+// Slots for a meeting_id (reads the Meetings tab). 0 = no Early Bird.
+function earlyBirdSlotsFor_(ss, meetingId) {
+  var meetings = tableObjects_(ss.getSheetByName("Meetings"));
+  var target = null;
+  for (var i = 0; i < meetings.length; i++) {
+    if (String(meetings[i].meeting_id || "").trim() === meetingId) { target = meetings[i]; break; }
+  }
+  if (!target) return 0;
+  return earlyBirdSlotsForMeeting_(target, meetings, earlyBirdDefaultSlots_(ss));
+}
+
+// Map meeting_id -> slots for every meeting.
+function earlyBirdSlotsMap_(ss) {
+  var meetings = tableObjects_(ss.getSheetByName("Meetings"));
+  var total = earlyBirdDefaultSlots_(ss);
+  var out = {};
+  meetings.forEach(function (m) {
+    var id = String(m.meeting_id || "").trim();
+    if (id) out[id] = earlyBirdSlotsForMeeting_(m, meetings, total);
+  });
+  return out;
+}
+
+// Rotary Tools → "Enforce Early Bird slot caps (trim extras)".
+// Removes EarlyBird rows whose rank is above the meeting's slot cap
+// (e.g. ranks 6–10 on a day where a board meeting and a regular
+// meeting each get 5). Rows for events with 0 slots are NOT deleted —
+// they are listed in the toast for the admin to review by hand.
+function enforceEarlyBirdSlotCaps() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var result = enforceEarlyBirdSlotCaps_(ss);
+  var msg;
+  if (result.removed === 0) {
+    msg = "Early Bird already within slot caps — nothing removed.";
+  } else {
+    msg = "Removed " + result.removed + " Early Bird row" + (result.removed === 1 ? "" : "s") +
+      " above the slot cap: " + Object.keys(result.byMeeting).map(function (id) {
+        return id + " (" + result.byMeeting[id].removed + " removed, " +
+          result.byMeeting[id].cap + " slots)";
+      }).join("; ") + ".";
+  }
+  if (result.noSlotRows > 0) {
+    msg += " " + result.noSlotRows + " row(s) belong to events that do not run Early Bird (" +
+      result.noSlotMeetings.join(", ") + ") — left in place for review.";
+  }
+  ss.toast(msg, "Rotary Tools", 12);
+  return result;
+}
+
+function enforceEarlyBirdSlotCaps_(ss) {
+  var sh = ss.getSheetByName("EarlyBird");
+  var result = { removed: 0, byMeeting: {}, noSlotRows: 0, noSlotMeetings: [] };
+  if (!sh || sh.getLastRow() < 2) return result;
+  var headers = sheetHeaders_(sh);
+  var meetingIdx = headers.indexOf("meeting_id");
+  var rankIdx = headers.indexOf("rank");
+  if (meetingIdx < 0 || rankIdx < 0) return result;
+  var caps = earlyBirdSlotsMap_(ss);
+  var width = sh.getLastColumn();
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, width).getValues();
+  var keep = [];
+  rows.forEach(function (row) {
+    var raw = String(row[meetingIdx] || "");
+    var id = extractMeetingId_(raw) || raw.trim();
+    var blank = row.every(function (v) { return String(v || "").trim() === ""; });
+    if (blank) return;
+    var cap = caps[id];
+    var rank = parseInt(row[rankIdx], 10);
+    if (cap === undefined) { keep.push(row); return; }          // unknown meeting: leave for validation
+    if (cap === 0) {
+      result.noSlotRows++;
+      if (result.noSlotMeetings.indexOf(id) < 0) result.noSlotMeetings.push(id);
+      keep.push(row);
+      return;
+    }
+    if (rank > cap) {
+      result.removed++;
+      if (!result.byMeeting[id]) result.byMeeting[id] = { removed: 0, cap: cap };
+      result.byMeeting[id].removed++;
+      return;
+    }
+    keep.push(row);
+  });
+  if (result.removed === 0) return result;
+  sh.getRange(2, 1, rows.length, width).clearContent();
+  if (keep.length > 0) sh.getRange(2, 1, keep.length, width).setValues(keep);
+  sortEarlyBirdByMeetingDate_(sh);
+  SpreadsheetApp.flush();
+  return result;
 }
 
 function enforceAttendanceModeForEdit_(e) {
@@ -1789,7 +2282,7 @@ function buildEntryPad_(ss) {
   sh.getRange("B2").insertCheckboxes().setBackground("#D7F2DC");
   sh.getRange("C2:H2").merge();
   sh.getRange("C2").setValue("Pick the event, tick attendees, then SAVE.").setFontStyle("italic");
-  sh.getRange("A3").setValue("Attendance mode is required for regular meetings. EB rank 1–10. Blank Credit uses the event value.")
+  sh.getRange("A3").setValue("Attendance mode is required for regular meetings. EB ranks depend on the event. Blank Credit uses the event value.")
     .setFontSize(9).setFontColor("#666666");
   sh.getRange("A3:H3").merge();
 

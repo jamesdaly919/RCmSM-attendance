@@ -77,7 +77,8 @@ export default function Dashboard({ model, mk, months, setMonth, today, go }) {
         {eb.length === 0 ? (
           <p className="muted">
             No Early Bird awards recorded for this month yet. The first {model.slots} members
-            to arrive at each regular Monday meeting earn one.
+            to arrive at each regular Monday meeting (and each board meeting) earn one —
+            5 each when both fall on the same day.
           </p>
         ) : (
           <ol className="board">

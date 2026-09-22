@@ -78,6 +78,10 @@ From now on, any time you change code on GitHub, Vercel republishes
 automatically. You will rarely need to touch the code, though — everyday
 updates happen only in the Google Sheet.
 
+For local verification, run `npm install`, `npx vite build`, and then
+`node test/harness.cjs` from the repository root. The Apps Script harness
+should finish with `ALL SCENARIOS PASS`.
+
 ---
 
 ## Part 2 — How the Google Sheet works day to day
@@ -182,9 +186,13 @@ sortable EntryPad roster**. This is the fast way to record a whole meeting
 2. **Tick "Present"** beside every member who attended.
 3. Choose **In-person** or **Online** for every checked member. EntryPad will
    not save until every attendee has a mode.
-4. For **regular meetings**, type the **EB rank** (1–10) beside the first ten
-   arrivals. Leave it blank for everyone else.
-5. Leave **Credit** blank to use the event's `credit_value` from Meetings (1 if blank). Enter a number only to override it for that attendee.
+4. For **regular meetings and board meetings**, type the **EB rank** beside
+   the first arrivals. The dropdown only offers the ranks that event has:
+   normally 1–10, but **1–5 when a board meeting and a regular meeting fall
+   on the same day** (5 slots each, 10 for the day). Leave it blank for
+   everyone else. Other makeup/special events have no Early Bird.
+5. Leave **Credit** blank to use the event's `credit_value` from Meetings
+   (1 if blank). Enter a number only to override it for that attendee.
 6. Tick the green **SAVE** checkbox.
 
 The script copies everything into the Attendance and EarlyBird tabs, skips
@@ -213,8 +221,36 @@ correction, a late report, or deleting a mistaken row. Enter or select the
 member ID, full name, or nickname in its matching column. The connected fields
 fill automatically. If a value is ambiguous, enter the Member ID.
 
-Early Bird rules the app enforces: rank 1 = first to arrive, ranks 1–10 only,
-one award per row, regular meetings only.
+Early Bird rules the app enforces: rank 1 = first to arrive, one award per
+row, regular and board meetings only (a "board meeting" is any makeup/special
+event whose title contains the word *board*). Slots per meeting: 10, or 5 each
+when a board meeting and a regular meeting share a date. Ranks above a
+meeting's slot count are flagged on the Data Check page and not counted.
+**Rotary Tools → Enforce Early Bird slot caps (trim extras)** deletes rows
+already recorded above the cap.
+
+### "Oops — that meeting was actually on a different date"
+
+It happens: attendance is recorded, and only later does the admin realize the
+meeting itself was entered with the wrong date (or wrong type/title). The
+meeting ID (e.g. `20260721-REG`) is built from the date, so just retyping the
+date used to leave the ID — and every attendance row pointing at it — stuck on
+the old date. Two ways to fix it now, both safe after attendance exists:
+
+1. **Just fix the date on the Meetings tab.** Type the correct date
+   (YYYY-MM-DD) into the meeting's date cell. The script notices the ID no
+   longer matches, rewrites it (keeping its suffix, e.g. `20260721-REG` →
+   `20260728-REG`), and moves every matching **Attendance**, **EarlyBird**,
+   and **Reports** row to the new ID. A toast confirms how many rows moved.
+2. **Rotary Tools → Edit a meeting (date / type / title)…** Opens a dialog:
+   pick the meeting, change its date, type, and/or title, and click Apply.
+   The ID is regenerated from the new values and all connected rows follow.
+   Use this when the type or title changes, since direct type/title edits on
+   the tab deliberately never rename a (possibly hand-typed) ID.
+
+Recorded attendance is never deleted or duplicated by either path — rows are
+renamed in place. If the corrected date collides with an existing meeting's ID,
+a number is appended (`…-REG2`) exactly like new meetings.
 
 ### Monthly routine (summary)
 
@@ -311,8 +347,9 @@ updated. Upgrades never renumber the existing Members tab.
 - **Total credits recorded** = raw sum including extras above 4.
 - **Projects** = attended events marked `is_project = yes`, counted per month
   and per Rotary year for the Projects leaderboard.
-- **Early Bird counts** = number of EarlyBird rows per member, shown per month
-  and per Rotary year (July–June).
+- **Early Bird counts** = number of EarlyBird rows per member within each
+  meeting's slot cap (10; 5 each when a board and a regular meeting share a
+  day), shown per month and per Rotary year (July–June).
 - Only **Active** members count in club stats and leaderboards; Inactive
   members can still be looked up individually.
 
